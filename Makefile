@@ -3,6 +3,7 @@
 # John Kelley, jkelley@icecube.wisc.edu
 #
 obj-m := atri-pcie.o
+
 dev_name += atri-pcie
 module_home := $(shell pwd)
 linux_rev := $(shell uname -r)

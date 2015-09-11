@@ -14,6 +14,7 @@
 #include <linux/ioctl.h>
 #include <asm/uaccess.h>
 
+#include "evt_queue.h"
 #include "atri-pcie.h"
 
 // Xilinx PCI firmware vendor ID
@@ -58,6 +59,9 @@ char           *gWriteBuffer     = NULL;    // Pointer to dword aligned DMA buff
 dma_addr_t      gReadHWAddr;
 dma_addr_t      gWriteHWAddr;
 
+// Queue of DMA buffers for event transfer
+evtq           *gEvtQ;
+
 //-----------------------------------------------------------------------------
 // Prototypes
 //-----------------------------------------------------------------------------
@@ -69,23 +73,27 @@ void  XPCIe_InitCard (void);
 void  XPCIe_InitiatorReset (void);
 
 // Called with device is opened
-int XPCIe_Open(struct inode *inode, struct file *filp)
-{
-  printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);
-  return SUCCESS;
+int XPCIe_Open(struct inode *inode, struct file *filp) {
+    gEvtQ = new_evtq(gDev);
+    if (gEvtQ == NULL) {
+        printk(KERN_ALERT"%s: Open: couldn't create event queue\n",gDrvrName);
+        return CRIT_ERR;
+    }
+    printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);  
+    return SUCCESS;
 }
 
 // Called when device is released
 int XPCIe_Release(struct inode *inode, struct file *filp)
 {
-  printk(KERN_INFO"%s: Release: module released\n",gDrvrName);
-  return SUCCESS;
+    delete_evtq(gEvtQ);
+    printk(KERN_INFO"%s: Release: module released\n",gDrvrName);
+    return SUCCESS;
 }
 
 // FIX ME 
 ssize_t XPCIe_Write_Orig(struct file *filp, const char *buf, size_t count,
-			 loff_t *f_pos)
-{
+			 loff_t *f_pos) {
   int ret = SUCCESS;
   memcpy((char *)gWriteBuffer, buf, count);
   printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
@@ -95,8 +103,7 @@ ssize_t XPCIe_Write_Orig(struct file *filp, const char *buf, size_t count,
 }
 
 // FIX ME
-ssize_t XPCIe_Read_Orig(struct file *filp, char *buf, size_t count, loff_t *f_pos)
-{
+ssize_t XPCIe_Read_Orig(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
   memcpy(buf, (char *)gWriteBuffer, count);
   printk(KERN_INFO"%s: XPCIe_Read_Orig: %d bytes have been read...\n", gDrvrName, (int)count);
   return (0);
@@ -114,14 +121,9 @@ struct file_operations XPCIe_Intf = {
 
 static int XPCIe_init(void)
 {
-  // Find the Xilinx EP device.  The device is found by matching device and vendor ID's which is defined
-  // at the top of this file.  Be default, the driver will look for 10EE & 0007.  If the core is generated 
-  // with other settings, the defines at the top must be changed or the driver will not load
+  // Find the Xilinx EP device.  
   gDev = pci_get_device (PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
   if (NULL == gDev) {
-
-    // If a matching device or vendor ID is not found, return failure and update kernel log. 
-    // NOTE: In fedora systems, the kernel log is located at: /var/log/messages
     printk(KERN_WARNING"%s: Init: Hardware not found.\n", gDrvrName);
     return (CRIT_ERR);
   }
@@ -130,40 +132,31 @@ static int XPCIe_init(void)
 
   // Get Base Address of registers from pci structure. Should come from pci_dev
   // structure, but that element seems to be missing on the development system.
-  gBaseHdwr = pci_resource_start (gDev, 0);
+  gBaseHdwr = pci_resource_start(gDev, 0);
 
   if (0 > gBaseHdwr) {
     printk(KERN_WARNING"%s: Init: Base Address not set.\n", gDrvrName);
     return (CRIT_ERR);
   } 
-
-  // Print Base Address to kernel log
   printk(KERN_INFO"%s: Init: Base hw val %lx\n", gDrvrName, (unsigned long)gBaseHdwr);
 
   // Get the Base Address Length
   gBaseLen = pci_resource_len (gDev, 0);
-
-  // Print the Base Address Length to Kernel Log
   printk(KERN_INFO"%s: Init: Base hw len %d\n", gDrvrName, (unsigned int)gBaseLen);
 
   // Remap the I/O register block so that it can be safely accessed.
   // I/O register block starts at gBaseHdwr and is 32 bytes long.
-  // It is cast to char because that is the way Linus does it.
-  // Reference "/usr/src/Linux-2.4/Documentation/IO-mapping.txt".
   gBaseVirt = ioremap(gBaseHdwr, gBaseLen);
   if (!gBaseVirt) {
     printk(KERN_WARNING"%s: Init: Could not remap memory.\n", gDrvrName);
     return (CRIT_ERR);
   } 
-
-  // Print out the aquired virtual base addresss
   printk(KERN_INFO"%s: Init: Virt HW address %lX\n", gDrvrName, (unsigned long)gBaseVirt);
 
   // Get IRQ from pci_dev structure. It may have been remapped by the kernel,
   // and this value will be the correct one.
   gIrq = gDev->irq;
   printk(KERN_INFO"%s: Init: Device IRQ: %X\n",gDrvrName, gIrq);
-
 
   //---START: Initialize Hardware
 
@@ -181,7 +174,7 @@ static int XPCIe_init(void)
   printk(KERN_INFO"%s: Init: Initialize Hardware Done..\n",gDrvrName);
  
   // Request IRQ from OS.
-  printk(KERN_INFO"%s: ISR Setup..\n", gDrvrName);
+  printk(KERN_INFO"%s: IRQ Setup..\n", gDrvrName);
   // Try to get an MSI interrupt
   if (0 > pci_enable_msi(gDev))
     printk(KERN_WARNING"%s: Init: Unable to enable MSI",gDrvrName);    
@@ -236,10 +229,7 @@ static int XPCIe_init(void)
   gStatFlags = gStatFlags | HAVE_KREG;
 
   //--- END: Register Driver
-
-  // The driver is now successfully loaded.  All HW is initialized, IRQ's assigned, and buffers allocated
-  printk("%s driver is loaded\n", gDrvrName);
-
+  printk(KERN_ALERT"%s driver is loaded\n", gDrvrName);
 
   // Initializing card registers
   XPCIe_InitCard();
@@ -274,20 +264,20 @@ void XPCIe_InitCard() {
 //--- XPCIe_exit(): Performs any cleanup required before releasing the device
 static void XPCIe_exit(void) {
 
-  printk(KERN_INFO"%s: Release memory",gDrvrName);
+  printk(KERN_DEBUG"%s: Release memory",gDrvrName);
   // Check if we have a memory region and free it
   if (gStatFlags & HAVE_REGION)
      (void) release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
 
   // Check if we have an IRQ and free it
-  printk(KERN_INFO"%s: Free IRQ",gDrvrName);  
+  printk(KERN_DEBUG"%s: Free IRQ",gDrvrName);  
   pci_disable_msi(gDev);
   if (gStatFlags & HAVE_IRQ) {
     (void) free_irq(gIrq, gDev);
   }
-  
-  printk(KERN_INFO"%s: Free consistent",gDrvrName);  
-  // Free memory allocated to our Endpoint
+
+  // Free memory allocated to our Endpoint  
+  printk(KERN_DEBUG"%s: Free consistent",gDrvrName);  
   if (gReadBuffer != NULL)
     pci_free_consistent(gDev, BUF_SIZE, gReadBuffer, gReadHWAddr);
   if (gWriteBuffer != NULL)
@@ -295,20 +285,19 @@ static void XPCIe_exit(void) {
 
   //gReadBuffer = NULL;
   //gWriteBuffer = NULL;
-  
-  printk(KERN_INFO"%s: unmap memory",gDrvrName);  
+
   // Free up memory pointed to by virtual address
+  printk(KERN_DEBUG"%s: unmap memory",gDrvrName);  
   if (gBaseVirt != NULL)
     iounmap(gBaseVirt);
   
   //gBaseVirt = NULL;
 
-  printk(KERN_INFO"%s: unregister driver",gDrvrName);    
   // Unregister Device Driver
+  printk(KERN_DEBUG"%s: unregister driver",gDrvrName);    
   if (gStatFlags & HAVE_KREG) {
     unregister_chrdev(gDrvrMajor, gDrvrName);
-  }
-  
+  }  
   gStatFlags = 0;
   
   printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
