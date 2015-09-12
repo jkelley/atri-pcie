@@ -26,6 +26,7 @@
 // Registers on the firmware side (8 dwords)
 #define PCIE_REGISTER_SIZE        (4*8)
 
+// Register definitions
 #define REG_DCSR      0  // Device Control Status Register
 #define REG_DMACR     1  // Write DMA Control Status Register
 #define REG_WDMATLPA  2  // Write DMA TLP Address Register
@@ -38,9 +39,11 @@
 #define REG_RDMATLPC  9  // Read DMA TLP Count Register
 #define REG_RDMASTAT 12  // Read DMA Status Register
 
-//Status Flags: 
-//       1 = Resouce successfully acquired
-//       0 = Resource not acquired.      
+// Register commands
+#define DCSR_RESET   0x1
+#define DCSR_ACTIVE  0x0
+
+//Status flags indicating if resource was acquired
 #define HAVE_REGION 0x01                    // I/O Memory region
 #define HAVE_IRQ    0x02                    // Interupt
 #define HAVE_KREG   0x04                    // Kernel registration
@@ -53,7 +56,8 @@ void           *gBaseVirt = NULL;           // Base register address (Virtual ad
 char            gDrvrName[]= "atri-pcie";   // Name of driver in proc.
 struct pci_dev *gDev = NULL;                // PCI device structure.
 int             gIrq;                       // IRQ assigned by PCI system.
-char           *gBufferUnaligned = NULL;    // Pointer to Unaligned DMA buffer.
+
+// FIX ME: demo code
 char           *gReadBuffer      = NULL;    // Pointer to dword aligned DMA buffer.
 char           *gWriteBuffer     = NULL;    // Pointer to dword aligned DMA buffer.
 dma_addr_t      gReadHWAddr;
@@ -91,7 +95,7 @@ int XPCIe_Release(struct inode *inode, struct file *filp)
     return SUCCESS;
 }
 
-// FIX ME 
+// FIX ME: this is demo code
 ssize_t XPCIe_Write_Orig(struct file *filp, const char *buf, size_t count,
 			 loff_t *f_pos) {
   int ret = SUCCESS;
@@ -102,7 +106,7 @@ ssize_t XPCIe_Write_Orig(struct file *filp, const char *buf, size_t count,
   return (ret);
 }
 
-// FIX ME
+// FIX ME: this is demo code
 ssize_t XPCIe_Read_Orig(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
   memcpy(buf, (char *)gWriteBuffer, count);
   printk(KERN_INFO"%s: XPCIe_Read_Orig: %d bytes have been read...\n", gDrvrName, (int)count);
@@ -122,7 +126,7 @@ struct file_operations XPCIe_Intf = {
 static int XPCIe_init(void)
 {
   // Find the Xilinx EP device.  
-  gDev = pci_get_device (PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
+  gDev = pci_get_device(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
   if (NULL == gDev) {
     printk(KERN_WARNING"%s: Init: Hardware not found.\n", gDrvrName);
     return (CRIT_ERR);
@@ -237,12 +241,11 @@ static int XPCIe_init(void)
   return 0;
 }
 
-//--- XPCIe_InitiatorReset(): Resets the XBMD reference design
+//--- XPCIe_InitiatorReset(): Resets the Xilinx reference design
 void XPCIe_InitiatorReset() {
-  // Reset device
-  XPCIe_WriteReg(REG_DCSR, 1);
-  // Make device active
-  XPCIe_WriteReg(REG_DCSR, 0);
+  // Reset device and then make it active
+  XPCIe_WriteReg(REG_DCSR, DCSR_RESET);
+  XPCIe_WriteReg(REG_DCSR, DCSR_ACTIVE);
 }
 
 //--- XPCIe_InitCard(): Initializes XBMD descriptor registers to default values
@@ -276,7 +279,7 @@ static void XPCIe_exit(void) {
     (void) free_irq(gIrq, gDev);
   }
 
-  // Free memory allocated to our Endpoint  
+  // Free memory allocated to our Endpoint
   printk(KERN_DEBUG"%s: Free consistent",gDrvrName);  
   if (gReadBuffer != NULL)
     pci_free_consistent(gDev, BUF_SIZE, gReadBuffer, gReadHWAddr);

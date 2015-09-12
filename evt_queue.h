@@ -30,23 +30,11 @@ typedef struct {
     wait_queue_head_t wr_waitq;
 } evtq;
 
-inline evtbuf *evtq_getentry(unsigned i) { return &(evt[i&EVTQMASK]); }
+inline evtbuf *evtq_getevent(evtq *q, unsigned i) { return &(q->evt[i&EVTQMASK]); }
 inline int evtq_entries(evtq *q) { return q->wr_idx - q->rd_idx; }
 inline int evtq_isfull(evtq *q)  { return NEVT == evtq_entries(q); }
 inline int evtq_isempty(evtq *q) { return q->wr_idx == q->rd_idx; }
 inline void empty_evtq(evtq *q) { q->wr_idx = q->rd_idx = 0; }
-
-/*
- * Read an event after a mapped DMA transfer in a userspace
- * buffer.  Can sleep.
- */
-/*
-int read_evt(evtq *q, char *buf) {
-    if (!evtq_isempty(q)) {
-    
-    }
-}
-*/
 
 /*
  * Clean up all memory allocated for the event queue.
@@ -57,7 +45,7 @@ void delete_evtq(evtq *q) {
         return;
     
     for (i = 0; i < NEVT; i++) {
-        evtbuf *eb = evtq_getentry(q, i);
+        evtbuf *eb = evtq_getevent(q, i);
         if (eb->buf != NULL)
             kfree(eb);
     }  
@@ -81,7 +69,7 @@ evtq *new_evtq(struct pci_dev *dev) {
 
     // Allocate all of the events (DMA buffers)
     for (i = 0; i < NEVT; i++) {
-        evtbuf *eb = evtq_getentry(q, i);        
+        evtbuf *eb = evtq_getevent(q, i);        
         eb->buf = kmalloc(EVTBUFSIZE, GFP_KERNEL | GFP_DMA);
         failed |= (eb->buf == NULL);
         
