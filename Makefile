@@ -8,8 +8,10 @@ dev_name += atri-pcie
 module_home := $(shell pwd)
 linux_rev := $(shell uname -r)
 
-all:
-	make -C /lib/modules/$(linux_rev)/build M=$(module_home) modules
+all: module test device
+
+test: readtest.c
+	gcc -g -o readtest readtest.c
 
 module:
 	make -C /lib/modules/$(linux_rev)/build M=$(module_home) modules
