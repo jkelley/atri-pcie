@@ -30,13 +30,8 @@ struct pci_dev  *gDev = NULL;                // PCI device structure.
 int              gIrq;                       // IRQ assigned by PCI system.
 
 // Device semaphore
+// FIX ME this is not really used correctly at the moment
 DEFINE_SEMAPHORE(gSem);
-
-// FIX ME: demo code
-char           *gReadBuffer      = NULL;    // Pointer to dword aligned DMA buffer.
-char           *gWriteBuffer     = NULL;    // Pointer to dword aligned DMA buffer.
-dma_addr_t      gReadHWAddr;
-dma_addr_t      gWriteHWAddr;
 
 // Queue of DMA buffers for event transfer
 evtq           *gEvtQ;
@@ -71,6 +66,9 @@ int XPCIe_Open(struct inode *inode, struct file *filp) {
         return -ENOMEM;
     }
 
+    // Set up the first DMA transfer
+    queue_work(dma_setup_wq, &dma_work);
+    
     up(&gSem);
     printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);    
     return SUCCESS;
@@ -85,24 +83,6 @@ int XPCIe_Release(struct inode *inode, struct file *filp)
     up(&gSem);
     printk(KERN_INFO"%s: Release: module released\n",gDrvrName);
     return SUCCESS;
-}
-
-// FIX ME: this is demo code
-ssize_t XPCIe_Write_Orig(struct file *filp, const char *buf, size_t count,
-                         loff_t *f_pos) {
-    int ret = SUCCESS;
-    memcpy((char *)gWriteBuffer, buf, count);
-    printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
-    memcpy((char *)gReadBuffer, buf, count);
-    printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
-    return (ret);
-}
-
-// FIX ME: this is demo code
-ssize_t XPCIe_Read_Orig(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
-    memcpy(buf, (char *)gWriteBuffer, count);
-    printk(KERN_INFO"%s: XPCIe_Read_Orig: %d bytes have been read...\n", gDrvrName, (int)count);
-    return (0);
 }
 
 ssize_t XPCIe_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
@@ -151,9 +131,9 @@ ssize_t XPCIe_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
 // Aliasing write, read, ioctl, etc...
 struct file_operations XPCIe_Intf = {
-    read:           XPCIe_Read_Orig,
-    write:          XPCIe_Write_Orig,
-    //    unlocked_ioctl: XPCIe_Ioctl,
+    read:           XPCIe_Read,
+    // write:          XPCIe_Write_Orig,
+    // unlocked_ioctl: XPCIe_Ioctl,
     open:           XPCIe_Open,
     release:        XPCIe_Release,
 };
@@ -233,30 +213,6 @@ static int XPCIe_init(void)
 
   //--- END: Initialize Hardware
 
-  //--- START: Allocate Buffers
-
-  // Allocate the read buffer with size BUF_SIZE and return the starting address
-  gReadBuffer = pci_alloc_consistent(gDev, BUF_SIZE, &gReadHWAddr);
-  if (NULL == gReadBuffer) {
-    printk(KERN_CRIT"%s: Init: Unable to allocate gBuffer.\n",gDrvrName);
-    return (CRIT_ERR);
-  }
-  // Print Read buffer size and address to kernel log
-  printk(KERN_INFO"%s: Read Buffer Allocation: %lX->%lX\n", gDrvrName, (unsigned long)gReadBuffer,
-	 (unsigned long)gReadHWAddr);
-
-  // Allocate the write buffer with size BUF_SIZE and return the starting address
-  gWriteBuffer = pci_alloc_consistent(gDev, BUF_SIZE, &gWriteHWAddr);
-  if (NULL == gWriteBuffer) {
-    printk(KERN_CRIT"%s: Init: Unable to allocate gBuffer.\n",gDrvrName);
-    return (CRIT_ERR);
-  }
-  // Print Write buffer size and address to kernel log  
-  printk(KERN_INFO"%s: Write Buffer Allocation: %lX->%lX\n", gDrvrName, (unsigned long)gWriteBuffer,
-	 (unsigned long)gWriteHWAddr);
-
-  //--- END: Allocate Buffers
-
   //--- START: Register Driver
 
   // Register with the kernel as a character device.
@@ -293,6 +249,7 @@ void XPCIe_InitCard() {
 
   XPCIe_InitiatorReset();
 
+  /*
   XPCIe_WriteReg(2, gWriteHWAddr);        // Write: Write DMA TLP Address register with starting address
   XPCIe_WriteReg(3, 0x20);                // Write: Write DMA TLP Size register with default value (32dwords)
   XPCIe_WriteReg(4, 0x2000);              // Write: Write DMA TLP Count register with default value (2000)
@@ -302,6 +259,7 @@ void XPCIe_InitCard() {
   XPCIe_WriteReg(7, gReadHWAddr);         // Write: Read DMA TLP Address register with starting address.
   XPCIe_WriteReg(8, 0x20);                // Write: Read DMA TLP Size register with default value (32dwords)
   XPCIe_WriteReg(9, 0x2000);              // Write: Read DMA TLP Count register with default value (2000)
+  */
 }
 
 //--- XPCIe_exit(): Performs any cleanup required before releasing the device
@@ -325,16 +283,6 @@ static void XPCIe_exit(void) {
     if (gStatFlags & HAVE_IRQ) {
         (void) free_irq(gIrq, gDev);
     }
-    
-    // Free memory allocated to our Endpoint
-    printk(KERN_DEBUG"%s: Free consistent\n",gDrvrName);  
-    if (gReadBuffer != NULL)
-        pci_free_consistent(gDev, BUF_SIZE, gReadBuffer, gReadHWAddr);
-    if (gWriteBuffer != NULL)
-        pci_free_consistent(gDev, BUF_SIZE, gWriteBuffer, gWriteHWAddr);
-    
-    //gReadBuffer = NULL;
-    //gWriteBuffer = NULL;
     
     // Free up memory pointed to by virtual address
     printk(KERN_DEBUG"%s: unmap memory\n",gDrvrName);  
@@ -377,6 +325,7 @@ irq_handler_t XPCIe_IRQHandler(int irq, void *dev_id, struct pt_regs *regs) {
 void dma_wr_setup(struct work_struct *work) {
     evtbuf *eb;
     // If the queue is full, wait until it is not
+    printk(KERN_INFO"%s: DMA write setup\n", gDrvrName);
     while (evtq_isfull(gEvtQ)) {
         if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
             continue;
