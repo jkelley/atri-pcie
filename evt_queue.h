@@ -36,8 +36,8 @@ inline int evtq_isfull(evtq *q)  { return NEVT == evtq_entries(q); }
 inline int evtq_isempty(evtq *q) { return q->wr_idx == q->rd_idx; }
 inline void empty_evtq(evtq *q) { q->wr_idx = q->rd_idx = 0; }
 
-/*
- * Clean up all memory allocated for the event queue.
+/* 
+ * delete_evtq: clean up all memory allocated for the event queue. 
  */
 void delete_evtq(evtq *q) {
     int i;    
@@ -88,7 +88,6 @@ evtq *new_evtq(struct pci_dev *dev) {
     empty_evtq(q);
     init_waitqueue_head(&q->wr_waitq);
     init_waitqueue_head(&q->rd_waitq);
-
     return q;
 }
 

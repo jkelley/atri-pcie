@@ -12,50 +12,25 @@
 #include <linux/interrupt.h>
 #include <linux/fs.h>
 #include <linux/ioctl.h>
+#include <linux/sched.h>
+#include <linux/semaphore.h>
+#include <linux/workqueue.h>
 #include <asm/uaccess.h>
 
 #include "evt_queue.h"
 #include "atri-pcie.h"
 
-// Xilinx PCI firmware vendor ID
-#define PCI_VENDOR_ID_XILINX      0x10ee
+int              gDrvrMajor = 241;           // Major number not dynamic.
+unsigned int     gStatFlags = 0x00;          // Status flags used for cleanup.
+unsigned long    gBaseHdwr;                  // Base register address (Hardware address)
+unsigned long    gBaseLen;                   // Base register address Length
+void            *gBaseVirt = NULL;           // Base register address (Virtual address, for I/O).
+char             gDrvrName[]= "atri-pcie";   // Name of driver in proc.
+struct pci_dev  *gDev = NULL;                // PCI device structure.
+int              gIrq;                       // IRQ assigned by PCI system.
 
-// Xilinx PCI firmware device ID
-#define PCI_DEVICE_ID_XILINX_PCIE 0x0007
-
-// Registers on the firmware side (8 dwords)
-#define PCIE_REGISTER_SIZE        (4*8)
-
-// Register definitions
-#define REG_DCSR      0  // Device Control Status Register
-#define REG_DMACR     1  // Write DMA Control Status Register
-#define REG_WDMATLPA  2  // Write DMA TLP Address Register
-#define REG_WDMATLPS  3  // Write DMA TLP Size Register
-#define REG_WDMATLPC  4  // Write DMA TLP Count Register
-#define REG_WDMATLPP  5  // Write DMA TLP Test Pattern Register
-#define REG_RDMATLPP  6  // Read DMA TLP Expected Pattern
-#define REG_RDMATLPA  7  // Read DMA TLP Address Register
-#define REG_RDMATLPS  8  // Read DMA TLP Size Register
-#define REG_RDMATLPC  9  // Read DMA TLP Count Register
-#define REG_RDMASTAT 12  // Read DMA Status Register
-
-// Register commands
-#define DCSR_RESET   0x1
-#define DCSR_ACTIVE  0x0
-
-//Status flags indicating if resource was acquired
-#define HAVE_REGION 0x01                    // I/O Memory region
-#define HAVE_IRQ    0x02                    // Interupt
-#define HAVE_KREG   0x04                    // Kernel registration
-
-int             gDrvrMajor = 241;           // Major number not dynamic.
-unsigned int    gStatFlags = 0x00;          // Status flags used for cleanup.
-unsigned long   gBaseHdwr;                  // Base register address (Hardware address)
-unsigned long   gBaseLen;                   // Base register address Length
-void           *gBaseVirt = NULL;           // Base register address (Virtual address, for I/O).
-char            gDrvrName[]= "atri-pcie";   // Name of driver in proc.
-struct pci_dev *gDev = NULL;                // PCI device structure.
-int             gIrq;                       // IRQ assigned by PCI system.
+// Device semaphore
+DEFINE_SEMAPHORE(gSem);
 
 // FIX ME: demo code
 char           *gReadBuffer      = NULL;    // Pointer to dword aligned DMA buffer.
@@ -75,42 +50,103 @@ u32   XPCIe_ReadReg (u32 dw_offset);
 void  XPCIe_WriteReg (u32 dw_offset, u32 val);
 void  XPCIe_InitCard (void);
 void  XPCIe_InitiatorReset (void);
+void dma_wr_setup(struct work_struct *work);
 
+// Work queue for DMA setup
+static struct workqueue_struct *dma_setup_wq;
+static DECLARE_WORK(dma_work, dma_wr_setup);
+
+//-----------------------------------------------------------------------------
 // Called with device is opened
 int XPCIe_Open(struct inode *inode, struct file *filp) {
+
+    // FIX ME: does this really need a lock?  
+    if (down_interruptible(&gSem))
+        return -ERESTARTSYS;
+
     gEvtQ = new_evtq(gDev);
     if (gEvtQ == NULL) {
         printk(KERN_ALERT"%s: Open: couldn't create event queue\n",gDrvrName);
-        return CRIT_ERR;
+        up(&gSem);
+        return -ENOMEM;
     }
-    printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);  
+
+    up(&gSem);
+    printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);    
     return SUCCESS;
 }
 
 // Called when device is released
 int XPCIe_Release(struct inode *inode, struct file *filp)
 {
+    // FIX ME: cannot really support more than one reader!
+    down(&gSem);
     delete_evtq(gEvtQ);
+    up(&gSem);
     printk(KERN_INFO"%s: Release: module released\n",gDrvrName);
     return SUCCESS;
 }
 
 // FIX ME: this is demo code
 ssize_t XPCIe_Write_Orig(struct file *filp, const char *buf, size_t count,
-			 loff_t *f_pos) {
-  int ret = SUCCESS;
-  memcpy((char *)gWriteBuffer, buf, count);
-  printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
-  memcpy((char *)gReadBuffer, buf, count);
-  printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
-  return (ret);
+                         loff_t *f_pos) {
+    int ret = SUCCESS;
+    memcpy((char *)gWriteBuffer, buf, count);
+    printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
+    memcpy((char *)gReadBuffer, buf, count);
+    printk(KERN_INFO"%s: XPCIe_Write_Orig: %d bytes have been written...\n", gDrvrName, (int)count);
+    return (ret);
 }
 
 // FIX ME: this is demo code
 ssize_t XPCIe_Read_Orig(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
-  memcpy(buf, (char *)gWriteBuffer, count);
-  printk(KERN_INFO"%s: XPCIe_Read_Orig: %d bytes have been read...\n", gDrvrName, (int)count);
-  return (0);
+    memcpy(buf, (char *)gWriteBuffer, count);
+    printk(KERN_INFO"%s: XPCIe_Read_Orig: %d bytes have been read...\n", gDrvrName, (int)count);
+    return (0);
+}
+
+ssize_t XPCIe_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
+
+    evtbuf *eb;
+    if (down_interruptible(&gSem))
+        return -ERESTARTSYS;
+    
+    // Check if event queue is empty 
+    while (evtq_isempty(gEvtQ)) {
+        up(&gSem); 
+
+        // If we're non blocking, return
+        if (filp->f_flags & O_NONBLOCK)
+            return -EAGAIN;
+
+        // Otherwise, wait until there is something there
+        if (wait_event_interruptible(gEvtQ->rd_waitq, !evtq_isempty(gEvtQ)))
+            return -ERESTARTSYS; /* signal caught */
+
+        /* Loop, but first reacquire the lock */
+        if (down_interruptible(&gSem))
+            return -ERESTARTSYS;
+    }
+
+    // Make sure buffer is large enough
+    eb = evtq_getevent(gEvtQ, gEvtQ->rd_idx);
+    if (eb->len > count) {
+        up(&gSem);
+        return -ENOMEM; // Is this OK?
+    }
+    if (copy_to_user(buf, eb->buf, eb->len)) {
+        up(&gSem);
+        return -EFAULT;
+    }
+    
+    // Once event has been read, increment the read pointer.
+    // Wake up any sleeping write preparation.
+    gEvtQ->rd_idx++;
+    up(&gSem);
+    wake_up_interruptible(&gEvtQ->wr_waitq);
+    
+    printk(KERN_INFO"%s: XPCIe_Read: %d bytes have been read...\n", gDrvrName, (int)eb->len);
+    return eb->len;
 }
 
 // Aliasing write, read, ioctl, etc...
@@ -122,10 +158,9 @@ struct file_operations XPCIe_Intf = {
     release:        XPCIe_Release,
 };
 
-
 static int XPCIe_init(void)
 {
-  // Find the Xilinx EP device.  
+  // Find the Xilinx PCIE device
   gDev = pci_get_device(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
   if (NULL == gDev) {
     printk(KERN_WARNING"%s: Init: Hardware not found.\n", gDrvrName);
@@ -133,7 +168,7 @@ static int XPCIe_init(void)
   }
   else
     pci_dev_put(gDev);
-
+  
   // Get Base Address of registers from pci structure. Should come from pci_dev
   // structure, but that element seems to be missing on the development system.
   gBaseHdwr = pci_resource_start(gDev, 0);
@@ -233,6 +268,11 @@ static int XPCIe_init(void)
   gStatFlags = gStatFlags | HAVE_KREG;
 
   //--- END: Register Driver
+
+  // Create DMA workqueue
+  dma_setup_wq = create_singlethread_workqueue("atri-pcie-dma-work");
+  gStatFlags = gStatFlags | HAVE_WQ;
+  
   printk(KERN_ALERT"%s driver is loaded\n", gDrvrName);
 
   // Initializing card registers
@@ -267,43 +307,107 @@ void XPCIe_InitCard() {
 //--- XPCIe_exit(): Performs any cleanup required before releasing the device
 static void XPCIe_exit(void) {
 
-  printk(KERN_DEBUG"%s: Release memory",gDrvrName);
-  // Check if we have a memory region and free it
-  if (gStatFlags & HAVE_REGION)
-     (void) release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
+    // Flush the DMA workqueue and destroy it
+    printk(KERN_DEBUG"%s: destroy workqueue\n", gDrvrName);
+    if (gStatFlags & HAVE_WQ) {
+        flush_workqueue(dma_setup_wq);
+        destroy_workqueue(dma_setup_wq);
+    }
+    
+    printk(KERN_DEBUG"%s: Release memory\n",gDrvrName);
+    // Check if we have a memory region and free it
+    if (gStatFlags & HAVE_REGION)
+        (void) release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
+    
+    // Check if we have an IRQ and free it
+    printk(KERN_DEBUG"%s: Free IRQ\n",gDrvrName);  
+    pci_disable_msi(gDev);
+    if (gStatFlags & HAVE_IRQ) {
+        (void) free_irq(gIrq, gDev);
+    }
+    
+    // Free memory allocated to our Endpoint
+    printk(KERN_DEBUG"%s: Free consistent\n",gDrvrName);  
+    if (gReadBuffer != NULL)
+        pci_free_consistent(gDev, BUF_SIZE, gReadBuffer, gReadHWAddr);
+    if (gWriteBuffer != NULL)
+        pci_free_consistent(gDev, BUF_SIZE, gWriteBuffer, gWriteHWAddr);
+    
+    //gReadBuffer = NULL;
+    //gWriteBuffer = NULL;
+    
+    // Free up memory pointed to by virtual address
+    printk(KERN_DEBUG"%s: unmap memory\n",gDrvrName);  
+    if (gBaseVirt != NULL)
+        iounmap(gBaseVirt);
+    
+    //gBaseVirt = NULL;
+    
+    // Unregister Device Driver
+    printk(KERN_DEBUG"%s: unregister driver\n",gDrvrName);    
+    if (gStatFlags & HAVE_KREG) {
+        unregister_chrdev(gDrvrMajor, gDrvrName);
+    }  
+    gStatFlags = 0;
+    
+    printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
+}
 
-  // Check if we have an IRQ and free it
-  printk(KERN_DEBUG"%s: Free IRQ",gDrvrName);  
-  pci_disable_msi(gDev);
-  if (gStatFlags & HAVE_IRQ) {
-    (void) free_irq(gIrq, gDev);
-  }
+irq_handler_t XPCIe_IRQHandler(int irq, void *dev_id, struct pt_regs *regs) {
+    evtbuf *eb;
+    printk(KERN_DEBUG"%s: Interrupt Handler Start ..",gDrvrName);
+    
+    // Unmap the DMA address
+    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
+    pci_unmap_single(gDev, eb->physaddr, eb->len, PCI_DMA_FROMDEVICE);
+    
+    // Data is now ready for processer. Increment the write pointer
+    // and wake up and waiting reads
+    gEvtQ->wr_idx++;
+    wake_up_interruptible(&gEvtQ->rd_waitq);
+   
+    // Put the setup for the next write into a workqueue.
+    // It can sleep so cannot be done here
+    queue_work(dma_setup_wq, &dma_work);
+    
+    printk(KERN_DEBUG"%s Interrupt Handler End ..\n", gDrvrName);
+    return (irq_handler_t) IRQ_HANDLED;
+}
 
-  // Free memory allocated to our Endpoint
-  printk(KERN_DEBUG"%s: Free consistent",gDrvrName);  
-  if (gReadBuffer != NULL)
-    pci_free_consistent(gDev, BUF_SIZE, gReadBuffer, gReadHWAddr);
-  if (gWriteBuffer != NULL)
-    pci_free_consistent(gDev, BUF_SIZE, gWriteBuffer, gWriteHWAddr);
+void dma_wr_setup(struct work_struct *work) {
+    evtbuf *eb;
+    // If the queue is full, wait until it is not
+    while (evtq_isfull(gEvtQ)) {
+        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
+            continue;
+    }
+    
+    // Map the DMA buffer
+    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
+    eb->physaddr = pci_map_single(gDev, eb->buf, eb->len, PCI_DMA_FROMDEVICE);
+    if (eb->physaddr == 0)  {
+        printk(KERN_ALERT"%s: Write Setup: Map error.\n", gDrvrName);
+        return;
+    }
+    
+    // Write the DMA address to the device
+    XPCIe_WriteReg(REG_RDMATLPA, eb->physaddr);
+    
+    // Tell the device to start DMA
+    XPCIe_WriteReg(REG_DDMACR, DDMACR_START);
+}
 
-  //gReadBuffer = NULL;
-  //gWriteBuffer = NULL;
+u32 XPCIe_ReadReg(u32 dw_offset) {
+    u32 ret = 0;
+    printk(KERN_INFO"%s Read Register %d\n", gDrvrName, dw_offset);
+    ret = readl(gBaseVirt + (4 * dw_offset));
+    return ret; 
+}
 
-  // Free up memory pointed to by virtual address
-  printk(KERN_DEBUG"%s: unmap memory",gDrvrName);  
-  if (gBaseVirt != NULL)
-    iounmap(gBaseVirt);
-  
-  //gBaseVirt = NULL;
-
-  // Unregister Device Driver
-  printk(KERN_DEBUG"%s: unregister driver",gDrvrName);    
-  if (gStatFlags & HAVE_KREG) {
-    unregister_chrdev(gDrvrMajor, gDrvrName);
-  }  
-  gStatFlags = 0;
-  
-  printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
+void XPCIe_WriteReg(u32 dw_offset, u32 val) {
+	printk(KERN_INFO"%s Write Register %d Value %x\n", gDrvrName,
+	       dw_offset, val);  
+    writel(val, (gBaseVirt + (4 * dw_offset)));
 }
 
 // Driver Entry Point
@@ -311,33 +415,4 @@ module_init(XPCIe_init);
 
 // Driver Exit Point
 module_exit(XPCIe_exit);
-
-// FIX ME does nothing
-irq_handler_t XPCIe_IRQHandler(int irq, void *dev_id, struct pt_regs *regs)
-{
-  u32 i, regx;
-
-  printk(KERN_WARNING"%s: Interrupt Handler Start ..",gDrvrName);
-  
-  for (i = 0; i < 32; i++) {
-     regx = XPCIe_ReadReg(i);
-     printk(KERN_WARNING"%s : REG<%d> : 0x%X\n", gDrvrName, i, regx);
-  }
-
-  printk(KERN_WARNING"%s Interrupt Handler End ..\n", gDrvrName);
-  return (irq_handler_t) IRQ_HANDLED;
-}
-
-u32 XPCIe_ReadReg (u32 dw_offset) {
-        u32 ret = 0;
-	printk(KERN_INFO"%s Read Register %d\n", gDrvrName, dw_offset);
-        ret = readl(gBaseVirt + (4 * dw_offset));
-        return ret; 
-}
-
-void XPCIe_WriteReg (u32 dw_offset, u32 val) {
-	printk(KERN_INFO"%s Write Register %d Value %x\n", gDrvrName,
-	       dw_offset, val);  
-        writel(val, (gBaseVirt + (4 * dw_offset)));
-}
 

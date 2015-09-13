@@ -23,7 +23,7 @@
 
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
-#define REG_DMACR     1  // Write DMA Control Status Register
+#define REG_DDMACR    1  // Device DMA Control Register
 #define REG_WDMATLPA  2  // Write DMA TLP Address Register
 #define REG_WDMATLPS  3  // Write DMA TLP Size Register
 #define REG_WDMATLPC  4  // Write DMA TLP Count Register
@@ -35,13 +35,15 @@
 #define REG_RDMASTAT 12  // Read DMA Status Register
 
 // Register commands
-#define DCSR_RESET   0x1
-#define DCSR_ACTIVE  0x0
+#define DCSR_RESET    0x1
+#define DCSR_ACTIVE   0x0
+#define DDMACR_START  0x1
 
 //Status flags indicating if resource was acquired
 #define HAVE_REGION 0x01                    // I/O Memory region
 #define HAVE_IRQ    0x02                    // Interupt
 #define HAVE_KREG   0x04                    // Kernel registration
+#define HAVE_WQ     0x08                    // DMA work queue
 
 // IOCTRL commands
 enum {
