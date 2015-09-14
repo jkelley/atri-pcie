@@ -365,3 +365,5 @@ module_init(xpcie_init);
 // Driver Exit Point
 module_exit(xpcie_exit);
 
+MODULE_LICENSE("Dual BSD/GPL");
+
