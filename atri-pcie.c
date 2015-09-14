@@ -40,11 +40,11 @@ evtq           *gEvtQ;
 // Prototypes
 //-----------------------------------------------------------------------------
 
-irq_handler_t XPCIe_IRQHandler (int irq, void *dev_id, struct pt_regs *regs);
-u32   XPCIe_ReadReg (u32 dw_offset);
-void  XPCIe_WriteReg (u32 dw_offset, u32 val);
-void  XPCIe_InitCard (void);
-void  XPCIe_InitiatorReset (void);
+irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs);
+u32 xpcie_read_reg(u32 dw_offset);
+void xpcie_write_reg(u32 dw_offset, u32 val);
+void xpcie_init_card(void);
+void xpcie_initiator_reset(void);
 void dma_wr_setup(struct work_struct *work);
 
 // Work queue for DMA setup
@@ -53,7 +53,7 @@ static DECLARE_WORK(dma_work, dma_wr_setup);
 
 //-----------------------------------------------------------------------------
 // Called with device is opened
-int XPCIe_Open(struct inode *inode, struct file *filp) {
+int xpcie_Open(struct inode *inode, struct file *filp) {
 
     // FIX ME: does this really need a lock?  
     if (down_interruptible(&gSem))
@@ -75,7 +75,7 @@ int XPCIe_Open(struct inode *inode, struct file *filp) {
 }
 
 // Called when device is released
-int XPCIe_Release(struct inode *inode, struct file *filp)
+int xpcie_Release(struct inode *inode, struct file *filp)
 {
     // FIX ME: cannot really support more than one reader!
     down(&gSem);
@@ -85,7 +85,7 @@ int XPCIe_Release(struct inode *inode, struct file *filp)
     return SUCCESS;
 }
 
-ssize_t XPCIe_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
+ssize_t xpcie_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
     evtbuf *eb;
     if (down_interruptible(&gSem))
@@ -108,8 +108,8 @@ ssize_t XPCIe_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
             return -ERESTARTSYS;
     }
 
-    // Make sure buffer is large enough
     eb = evtq_getevent(gEvtQ, gEvtQ->rd_idx);
+    // Make sure buffer is large enough    
     if (eb->len > count) {
         up(&gSem);
         return -ENOMEM; // Is this OK?
@@ -125,20 +125,20 @@ ssize_t XPCIe_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     up(&gSem);
     wake_up_interruptible(&gEvtQ->wr_waitq);
     
-    printk(KERN_INFO"%s: XPCIe_Read: %d bytes have been read...\n", gDrvrName, (int)eb->len);
+    printk(KERN_INFO"%s: xpcie_Read: %d bytes have been read...\n", gDrvrName, (int)eb->len);
     return eb->len;
 }
 
 // Aliasing write, read, ioctl, etc...
-struct file_operations XPCIe_Intf = {
-    read:           XPCIe_Read,
-    // write:          XPCIe_Write_Orig,
-    // unlocked_ioctl: XPCIe_Ioctl,
-    open:           XPCIe_Open,
-    release:        XPCIe_Release,
+struct file_operations xpcie_Intf = {
+    read:           xpcie_Read,
+    // write:          xpcie_Write_Orig,
+    // unlocked_ioctl: xpcie_Ioctl,
+    open:           xpcie_Open,
+    release:        xpcie_Release,
 };
 
-static int XPCIe_init(void)
+static int xpcie_init(void)
 {
   // Find the Xilinx PCIE device
   gDev = pci_get_device(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
@@ -198,7 +198,7 @@ static int XPCIe_init(void)
   if (0 > pci_enable_msi(gDev))
     printk(KERN_WARNING"%s: Init: Unable to enable MSI",gDrvrName);    
   
-  if (0 > request_irq(gIrq, (irq_handler_t) XPCIe_IRQHandler, IRQF_SHARED, gDrvrName, gDev)) {
+  if (0 > request_irq(gIrq, (irq_handler_t) xpcie_irq_handler, IRQF_SHARED, gDrvrName, gDev)) {
     printk(KERN_WARNING"%s: Init: Unable to allocate IRQ",gDrvrName);
     return (CRIT_ERR);
   }
@@ -216,7 +216,7 @@ static int XPCIe_init(void)
   //--- START: Register Driver
 
   // Register with the kernel as a character device.
-  if (0 > register_chrdev(gDrvrMajor, gDrvrName, &XPCIe_Intf)) {
+  if (0 > register_chrdev(gDrvrMajor, gDrvrName, &xpcie_Intf)) {
     printk(KERN_WARNING"%s: Init: will not register\n", gDrvrName);
     return (CRIT_ERR);
   }
@@ -232,38 +232,38 @@ static int XPCIe_init(void)
   printk(KERN_ALERT"%s driver is loaded\n", gDrvrName);
 
   // Initializing card registers
-  XPCIe_InitCard();
+  xpcie_init_card();
 
   return 0;
 }
 
-//--- XPCIe_InitiatorReset(): Resets the Xilinx reference design
-void XPCIe_InitiatorReset() {
+//--- xpcie_initiator_reset(): Resets the Xilinx reference design
+void xpcie_initiator_reset() {
   // Reset device and then make it active
-  XPCIe_WriteReg(REG_DCSR, DCSR_RESET);
-  XPCIe_WriteReg(REG_DCSR, DCSR_ACTIVE);
+  xpcie_write_reg(REG_DCSR, DCSR_RESET);
+  xpcie_write_reg(REG_DCSR, DCSR_ACTIVE);
 }
 
-//--- XPCIe_InitCard(): Initializes XBMD descriptor registers to default values
-void XPCIe_InitCard() {
+//--- xpcie_init_card(): Initializes XBMD descriptor registers to default values
+void xpcie_init_card() {
 
-  XPCIe_InitiatorReset();
+  xpcie_initiator_reset();
 
   /*
-  XPCIe_WriteReg(2, gWriteHWAddr);        // Write: Write DMA TLP Address register with starting address
-  XPCIe_WriteReg(3, 0x20);                // Write: Write DMA TLP Size register with default value (32dwords)
-  XPCIe_WriteReg(4, 0x2000);              // Write: Write DMA TLP Count register with default value (2000)
-  XPCIe_WriteReg(5, 0x00000000);          // Write: Write DMA TLP Pattern register with default value (0x0)
+  xpcie_write_reg(2, gWriteHWAddr);        // Write: Write DMA TLP Address register with starting address
+  xpcie_write_reg(3, 0x20);                // Write: Write DMA TLP Size register with default value (32dwords)
+  xpcie_write_reg(4, 0x2000);              // Write: Write DMA TLP Count register with default value (2000)
+  xpcie_write_reg(5, 0x00000000);          // Write: Write DMA TLP Pattern register with default value (0x0)
 
-  XPCIe_WriteReg(6, 0xfeedbeef);          // Write: Read DMA Expected Data Pattern with default value (feedbeef)
-  XPCIe_WriteReg(7, gReadHWAddr);         // Write: Read DMA TLP Address register with starting address.
-  XPCIe_WriteReg(8, 0x20);                // Write: Read DMA TLP Size register with default value (32dwords)
-  XPCIe_WriteReg(9, 0x2000);              // Write: Read DMA TLP Count register with default value (2000)
+  xpcie_write_reg(6, 0xfeedbeef);          // Write: Read DMA Expected Data Pattern with default value (feedbeef)
+  xpcie_write_reg(7, gReadHWAddr);         // Write: Read DMA TLP Address register with starting address.
+  xpcie_write_reg(8, 0x20);                // Write: Read DMA TLP Size register with default value (32dwords)
+  xpcie_write_reg(9, 0x2000);              // Write: Read DMA TLP Count register with default value (2000)
   */
 }
 
-//--- XPCIe_exit(): Performs any cleanup required before releasing the device
-static void XPCIe_exit(void) {
+//--- xpcie_exit(): Performs any cleanup required before releasing the device
+static void xpcie_exit(void) {
 
     // Flush the DMA workqueue and destroy it
     printk(KERN_DEBUG"%s: destroy workqueue\n", gDrvrName);
@@ -301,7 +301,7 @@ static void XPCIe_exit(void) {
     printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
 }
 
-irq_handler_t XPCIe_IRQHandler(int irq, void *dev_id, struct pt_regs *regs) {
+irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     evtbuf *eb;
     printk(KERN_DEBUG"%s: Interrupt Handler Start ..",gDrvrName);
     
@@ -340,28 +340,28 @@ void dma_wr_setup(struct work_struct *work) {
     }
     
     // Write the DMA address to the device
-    XPCIe_WriteReg(REG_RDMATLPA, eb->physaddr);
+    xpcie_write_reg(REG_RDMATLPA, eb->physaddr);
     
     // Tell the device to start DMA
-    XPCIe_WriteReg(REG_DDMACR, DDMACR_START);
+    xpcie_write_reg(REG_DDMACR, DDMACR_START);
 }
 
-u32 XPCIe_ReadReg(u32 dw_offset) {
+u32 xpcie_read_reg(u32 dw_offset) {
     u32 ret = 0;
     printk(KERN_INFO"%s Read Register %d\n", gDrvrName, dw_offset);
     ret = readl(gBaseVirt + (4 * dw_offset));
     return ret; 
 }
 
-void XPCIe_WriteReg(u32 dw_offset, u32 val) {
+void xpcie_write_reg(u32 dw_offset, u32 val) {
 	printk(KERN_INFO"%s Write Register %d Value %x\n", gDrvrName,
 	       dw_offset, val);  
     writel(val, (gBaseVirt + (4 * dw_offset)));
 }
 
 // Driver Entry Point
-module_init(XPCIe_init);
+module_init(xpcie_init);
 
 // Driver Exit Point
-module_exit(XPCIe_exit);
+module_exit(xpcie_exit);
 
