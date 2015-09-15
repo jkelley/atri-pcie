@@ -9,7 +9,7 @@
 #ifndef __ATRI_EVT_QUEUE__
 #define __ATRI_EVT_QUEUE__
 
-#define NEVTQ_BITS  6
+#define NEVTQ_BITS  2
 #define NEVT       (1 << NEVTQ_BITS)
 #define EVTQMASK   (NEVT-1)
 
@@ -59,24 +59,25 @@ void delete_evtq(evtq *q) {
 evtq *new_evtq(struct pci_dev *dev) {
     int i;
     int failed = 0;
+    evtq *q;
     
     // Allocate the queue itself
-    evtq *q = (evtq *) kmalloc(sizeof(evtq), GFP_KERNEL);
+    printk(KERN_INFO"new_evtq: allocating queue\n");    
+    q = (evtq *) kmalloc(sizeof(evtq), GFP_KERNEL);
     if (q == NULL) {
         delete_evtq(q);
         return NULL;
     }
 
     // Allocate all of the events (DMA buffers)
+    printk(KERN_INFO"new_evtq: allocating events\n");    
     for (i = 0; i < NEVT; i++) {
         evtbuf *eb = evtq_getevent(q, i);        
-        eb->buf = kmalloc(EVTBUFSIZE, GFP_KERNEL | GFP_DMA);
+        eb->buf = kmalloc(EVTBUFSIZE, GFP_KERNEL);
         failed |= (eb->buf == NULL);
         
         // Don't map the physical address yet - shared resource
         eb->physaddr = (dma_addr_t)NULL;            
-        //eb->physaddr = pci_map_single(dev, eb->buf, EVTBUFSIZE, PCI_DMA_FROMDEVICE);
-        
         eb->len = EVTBUFSIZE;
     }
     if (failed) {
