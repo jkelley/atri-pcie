@@ -265,26 +265,26 @@ void xpcie_init_card() {
 static void xpcie_exit(void) {
 
     // Flush the DMA workqueue and destroy it
-    printk(KERN_DEBUG"%s: destroy workqueue\n", gDrvrName);
+    printk(KERN_INFO"%s: destroy workqueue\n", gDrvrName);
     if (gStatFlags & HAVE_WQ) {
         flush_workqueue(dma_setup_wq);
         destroy_workqueue(dma_setup_wq);
     }
     
-    printk(KERN_DEBUG"%s: Release memory\n",gDrvrName);
+    printk(KERN_INFO"%s: Release memory\n",gDrvrName);
     // Check if we have a memory region and free it
     if (gStatFlags & HAVE_REGION)
         (void) release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
     
     // Check if we have an IRQ and free it
-    printk(KERN_DEBUG"%s: Free IRQ\n",gDrvrName);  
+    printk(KERN_INFO"%s: Free IRQ\n",gDrvrName);  
     pci_disable_msi(gDev);
     if (gStatFlags & HAVE_IRQ) {
         (void) free_irq(gIrq, gDev);
     }
     
     // Free up memory pointed to by virtual address
-    printk(KERN_DEBUG"%s: unmap memory\n",gDrvrName);  
+    printk(KERN_INFO"%s: unmap memory\n",gDrvrName);  
     if (gBaseVirt != NULL)
         iounmap(gBaseVirt);    
     gBaseVirt = NULL;

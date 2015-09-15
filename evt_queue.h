@@ -74,7 +74,7 @@ evtq *new_evtq(struct pci_dev *dev) {
     printk(KERN_INFO"new_evtq: allocating events\n");    
     for (i = 0; i < NEVT; i++) {
         evtbuf *eb = evtq_getevent(q, i);
-        eb->buf = kmalloc(EVTBUFSIZE, GFP_KERNEL | GFP_DMA);
+        eb->buf = kmalloc(EVTBUFSIZE, GFP_KERNEL);
         failed |= (eb->buf == NULL);
         
         // Don't map the physical address yet - shared resource
