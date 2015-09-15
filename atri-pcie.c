@@ -34,7 +34,7 @@ int              gIrq;                       // IRQ assigned by PCI system.
 DEFINE_SEMAPHORE(gSem);
 
 // Queue of DMA buffers for event transfer
-evtq           *gEvtQ;
+evtq           *gEvtQ = NULL;
 
 //-----------------------------------------------------------------------------
 // Prototypes
@@ -55,21 +55,23 @@ static DECLARE_WORK(dma_work, dma_wr_setup);
 // Called with device is opened
 int xpcie_Open(struct inode *inode, struct file *filp) {
 
-    // FIX ME: does this really need a lock?  
-    if (down_interruptible(&gSem))
-        return -ERESTARTSYS;
+    // FIX ME: does this really need a lock?
+    // I don't think so; just need to limit to one reader
+    //if (down_interruptible(&gSem))
+    //    return -ERESTARTSYS;
 
     gEvtQ = new_evtq(gDev);
     if (gEvtQ == NULL) {
         printk(KERN_ALERT"%s: Open: couldn't create event queue\n",gDrvrName);
-        up(&gSem);
+        // up(&gSem);
         return -ENOMEM;
     }
 
     // Set up the first DMA transfer
-    queue_work(dma_setup_wq, &dma_work);
+    // TEMP FIX ME
+    //queue_work(dma_setup_wq, &dma_work);
     
-    up(&gSem);
+    //up(&gSem);
     printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);    
     return SUCCESS;
 }
@@ -77,10 +79,7 @@ int xpcie_Open(struct inode *inode, struct file *filp) {
 // Called when device is released
 int xpcie_Release(struct inode *inode, struct file *filp)
 {
-    // FIX ME: cannot really support more than one reader!
-    down(&gSem);
     delete_evtq(gEvtQ);
-    up(&gSem);
     printk(KERN_INFO"%s: Release: module released\n",gDrvrName);
     return SUCCESS;
 }
@@ -287,9 +286,8 @@ static void xpcie_exit(void) {
     // Free up memory pointed to by virtual address
     printk(KERN_DEBUG"%s: unmap memory\n",gDrvrName);  
     if (gBaseVirt != NULL)
-        iounmap(gBaseVirt);
-    
-    //gBaseVirt = NULL;
+        iounmap(gBaseVirt);    
+    gBaseVirt = NULL;
     
     // Unregister Device Driver
     printk(KERN_DEBUG"%s: unregister driver\n",gDrvrName);    

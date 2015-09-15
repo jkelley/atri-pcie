@@ -17,6 +17,7 @@ int main(int argc, char **argv) {
     }
 
     // Do some stuff
+    sleep(30);
     
     close(f);
         
