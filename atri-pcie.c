@@ -45,15 +45,15 @@ u32 xpcie_read_reg(u32 dw_offset);
 void xpcie_write_reg(u32 dw_offset, u32 val);
 void xpcie_init_card(void);
 void xpcie_initiator_reset(void);
-void dma_wr_setup(struct work_struct *work);
+void dma_setup(struct work_struct *work);
 
 // Work queue for DMA setup
 static struct workqueue_struct *dma_setup_wq;
-static DECLARE_WORK(dma_work, dma_wr_setup);
+static DECLARE_WORK(dma_work, dma_setup);
 
 //-----------------------------------------------------------------------------
 // Called with device is opened
-int xpcie_Open(struct inode *inode, struct file *filp) {
+int xpcie_open(struct inode *inode, struct file *filp) {
 
     // FIX ME: does this really need a lock?
     // I don't think so; just need to limit to one reader
@@ -68,8 +68,15 @@ int xpcie_Open(struct inode *inode, struct file *filp) {
     }
 
     // Set up the first DMA transfer
-    // TEMP FIX ME
-    //queue_work(dma_setup_wq, &dma_work);
+    // TEMP FIX ME: this is for the sample firmware only
+    // Write: Write DMA Expected Data Pattern with default value (feedbeef)    
+    xpcie_write_reg(REG_WDMATLPP, 0xfeedbeef);
+    // Write: Write DMA TLP Size register (32dwords)    
+    xpcie_write_reg(REG_WDMATLPS, 0x20);
+    // Write: Write DMA TLP Count register
+    xpcie_write_reg(REG_WDMATLPC, 0x0001);
+
+    queue_work(dma_setup_wq, &dma_work);
     
     //up(&gSem);
     printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);    
@@ -77,18 +84,27 @@ int xpcie_Open(struct inode *inode, struct file *filp) {
 }
 
 // Called when device is released
-int xpcie_Release(struct inode *inode, struct file *filp)
+int xpcie_release(struct inode *inode, struct file *filp)
 {
     delete_evtq(gEvtQ);
     printk(KERN_INFO"%s: Release: module released\n",gDrvrName);
     return SUCCESS;
 }
 
-ssize_t xpcie_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
+ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
     evtbuf *eb;
+    printk(KERN_INFO"%s: reading %d bytes\n", gDrvrName, (int)count);
+        
     if (down_interruptible(&gSem))
         return -ERESTARTSYS;
+
+    // See if we can just get here
+    if (evtq_isempty(gEvtQ)) {
+        printk(KERN_INFO"%s: evtq is empty.  Bailing\n", gDrvrName);
+        up(&gSem);
+        return 0;        
+    }
     
     // Check if event queue is empty 
     while (evtq_isempty(gEvtQ)) {
@@ -108,6 +124,7 @@ ssize_t xpcie_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     }
 
     eb = evtq_getevent(gEvtQ, gEvtQ->rd_idx);
+
     // Make sure buffer is large enough    
     if (eb->len > count) {
         up(&gSem);
@@ -130,11 +147,11 @@ ssize_t xpcie_Read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
 // Aliasing write, read, ioctl, etc...
 struct file_operations xpcie_Intf = {
-    read:           xpcie_Read,
+    read:           xpcie_read,
     // write:          xpcie_Write_Orig,
     // unlocked_ioctl: xpcie_Ioctl,
-    open:           xpcie_Open,
-    release:        xpcie_Release,
+    open:           xpcie_open,
+    release:        xpcie_release,
 };
 
 static int xpcie_init(void)
@@ -226,8 +243,12 @@ static int xpcie_init(void)
 
   // Create DMA workqueue
   dma_setup_wq = create_singlethread_workqueue("atri-pcie-dma-work");
+  if (dma_setup_wq == NULL) {
+      printk(KERN_WARNING"%s: Init: couldn't create DMA workqueue\n", gDrvrName);
+      return (CRIT_ERR);
+  }
   gStatFlags = gStatFlags | HAVE_WQ;
-  
+    
   printk(KERN_ALERT"%s driver is loaded\n", gDrvrName);
 
   // Initializing card registers
@@ -301,7 +322,11 @@ static void xpcie_exit(void) {
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     evtbuf *eb;
-    printk(KERN_DEBUG"%s: Interrupt Handler Start ..",gDrvrName);
+    printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
+
+    // Disable further interrupts
+    // Not sure this is necessary
+    xpcie_write_reg(REG_DDMACR, DDMACR_WR_INTDIS);
     
     // Unmap the DMA address
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
@@ -316,19 +341,20 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     // It can sleep so cannot be done here
     queue_work(dma_setup_wq, &dma_work);
     
-    printk(KERN_DEBUG"%s Interrupt Handler End ..\n", gDrvrName);
+    printk(KERN_INFO"%s Interrupt Handler End ..\n", gDrvrName);
     return (irq_handler_t) IRQ_HANDLED;
 }
 
-void dma_wr_setup(struct work_struct *work) {
+void dma_setup(struct work_struct *work) {
     evtbuf *eb;
     // If the queue is full, wait until it is not
     printk(KERN_INFO"%s: DMA write setup\n", gDrvrName);
+
     while (evtq_isfull(gEvtQ)) {
         if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
             continue;
     }
-    
+
     // Map the DMA buffer
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
     eb->physaddr = pci_map_single(gDev, eb->buf, eb->len, PCI_DMA_FROMDEVICE);
@@ -337,11 +363,14 @@ void dma_wr_setup(struct work_struct *work) {
         return;
     }
     
-    // Write the DMA address to the device
-    xpcie_write_reg(REG_RDMATLPA, eb->physaddr);
-    
+    // Write the PCIe write DMA address to the device
+    xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
+
+    // Ensure address has made it
+    wmb();
+
     // Tell the device to start DMA
-    xpcie_write_reg(REG_DDMACR, DDMACR_START);
+    xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
 }
 
 u32 xpcie_read_reg(u32 dw_offset) {

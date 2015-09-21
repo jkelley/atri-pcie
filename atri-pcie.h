@@ -37,7 +37,10 @@
 // Register commands
 #define DCSR_RESET    0x1
 #define DCSR_ACTIVE   0x0
-#define DDMACR_START  0x1
+#define DDMACR_WR_START   1
+#define DDMACR_WR_INTDIS (1 << 7)
+#define DDMACR_RD_START  (1 << 16 )
+#define DDMACR_RD_INTDIS (1 << 32 )
 
 //Status flags indicating if resource was acquired
 #define HAVE_REGION 0x01                    // I/O Memory region

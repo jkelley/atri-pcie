@@ -47,7 +47,7 @@ void delete_evtq(evtq *q) {
     for (i = 0; i < NEVT; i++) {
         evtbuf *eb = evtq_getevent(q, i);
         if (eb->buf != NULL) {
-            kfree(eb);
+            kfree(eb->buf);
             eb = NULL;
         }
     }  
@@ -82,10 +82,10 @@ evtq *new_evtq(struct pci_dev *dev) {
         eb->len = EVTBUFSIZE;
     }
     if (failed) {
+        printk(KERN_WARNING"new_evtq: allocations failed!\n");             
         delete_evtq(q);
         return NULL;
     }
-    printk(KERN_INFO"new_evtq: got past allocations\n");
     
     q->dev = dev;           
     empty_evtq(q);

@@ -24,3 +24,5 @@ device:
 
 clean:
 	make -C /lib/modules/$(linux_rev)/build M=$(module_home) clean
+	rm -f readtest
+
