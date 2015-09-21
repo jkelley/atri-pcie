@@ -21,6 +21,10 @@
 // Registers on the firmware side (8 dwords)
 #define PCIE_REGISTER_SIZE        (4*8)
 
+// PCI DMA mask -- just use 32 bits
+// device can actually support more
+#define PCI_HW_DMA_MASK           0xffffffff
+
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
 #define REG_DDMACR    1  // Device DMA Control Register

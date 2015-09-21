@@ -41,6 +41,7 @@ evtq           *gEvtQ = NULL;
 //-----------------------------------------------------------------------------
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs);
+void xpcie_dump_regs(void);
 u32 xpcie_read_reg(u32 dw_offset);
 void xpcie_write_reg(u32 dw_offset, u32 val);
 void xpcie_init_card(void);
@@ -100,11 +101,13 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
         return -ERESTARTSYS;
 
     // See if we can just get here
+    /*
     if (evtq_isempty(gEvtQ)) {
         printk(KERN_INFO"%s: evtq is empty.  Bailing\n", gDrvrName);
         up(&gSem);
-        return 0;        
+        return 0;      
     }
+    */
     
     // Check if event queue is empty 
     while (evtq_isempty(gEvtQ)) {
@@ -211,10 +214,11 @@ static int xpcie_init(void)
   // Request IRQ from OS.
   printk(KERN_INFO"%s: IRQ Setup..\n", gDrvrName);
   // Try to get an MSI interrupt
-  if (0 > pci_enable_msi(gDev))
+  if (0 > pci_enable_msi(gDev)) {
     printk(KERN_WARNING"%s: Init: Unable to enable MSI",gDrvrName);    
-  
-  if (0 > request_irq(gIrq, (irq_handler_t) xpcie_irq_handler, IRQF_SHARED, gDrvrName, gDev)) {
+    return (CRIT_ERR);    
+  }  
+  if (0 > request_irq(gIrq, (irq_handler_t) xpcie_irq_handler, 0, gDrvrName, gDev)) {
     printk(KERN_WARNING"%s: Init: Unable to allocate IRQ",gDrvrName);
     return (CRIT_ERR);
   }
@@ -227,6 +231,12 @@ static int xpcie_init(void)
     return (CRIT_ERR);
   }
 
+  // Set address range for DMA transfers
+  if (pci_set_dma_mask(gDev, PCI_HW_DMA_MASK) < 0) {
+    printk(KERN_WARNING"%s: Init: DMA mask could not be set.\n", gDrvrName);
+    return (CRIT_ERR);
+  }
+  
   //--- END: Initialize Hardware
 
   //--- START: Register Driver
@@ -321,16 +331,17 @@ static void xpcie_exit(void) {
 }
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
-    evtbuf *eb;
+
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
     // Disable further interrupts
-    // Not sure this is necessary
+    // Not sure this is necessary -- probably not FIX ME
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_INTDIS);
     
     // Unmap the DMA address
-    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
-    pci_unmap_single(gDev, eb->physaddr, eb->len, PCI_DMA_FROMDEVICE);
+    // FIX ME: done only at release now
+    // eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
+    //pci_unmap_single(gDev, eb->physaddr, eb->len, PCI_DMA_FROMDEVICE);
     
     // Data is now ready for processer. Increment the write pointer
     // and wake up and waiting reads
@@ -356,13 +367,17 @@ void dma_setup(struct work_struct *work) {
     }
 
     // Map the DMA buffer
-    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
+    // TEMP FIX ME HOG THAT SHIT
+    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
+    /*
     eb->physaddr = pci_map_single(gDev, eb->buf, eb->len, PCI_DMA_FROMDEVICE);
     if (eb->physaddr == 0)  {
         printk(KERN_ALERT"%s: Write Setup: Map error.\n", gDrvrName);
         return;
     }
-    
+    */
+
+    printk(KERN_INFO"%s: DMA setup address: %lx\n", gDrvrName, (unsigned long)eb->physaddr);
     // Write the PCIe write DMA address to the device
     xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
 
@@ -371,6 +386,14 @@ void dma_setup(struct work_struct *work) {
 
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
+}
+
+void xpcie_dump_regs(void) {
+    u32 i, regx;
+    for (i = 0; i < 13; i++) {
+        regx = xpcie_read_reg(i);
+        printk(KERN_WARNING"%s : REG<%d> : 0x%X\n", gDrvrName, i, regx);
+    }    
 }
 
 u32 xpcie_read_reg(u32 dw_offset) {
