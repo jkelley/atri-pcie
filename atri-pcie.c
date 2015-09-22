@@ -50,11 +50,29 @@ u32 xpcie_read_reg(u32 dw_offset);
 void xpcie_write_reg(u32 dw_offset, u32 val);
 void xpcie_init_card(void);
 void xpcie_initiator_reset(void);
+void xpcie_remove(struct pci_dev *dev);
+int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id);
 void dma_setup(struct work_struct *work);
 
 // Work queue for DMA setup
 static struct workqueue_struct *dma_setup_wq;
 static DECLARE_WORK(dma_work, dma_setup);
+
+//-----------------------------------------------------------------------------
+// Driver struct
+static struct pci_device_id ids[] = {
+    { PCI_DEVICE(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE) },
+    { 0, }
+};
+
+MODULE_DEVICE_TABLE(pci, ids);
+
+static struct pci_driver pci_driver = {
+    .name = "atri-pcie",
+    .id_table = ids,
+    .probe = xpcie_probe,
+    .remove = xpcie_remove
+};
 
 //-----------------------------------------------------------------------------
 // Called with device is opened
@@ -146,12 +164,21 @@ struct file_operations xpcie_intf = {
     release:        xpcie_release,
 };
 
-static int xpcie_init(void) {
+static int __init xpcie_init(void) {
+    return pci_register_driver(&pci_driver);
+}
+
+static void __exit xpcie_exit(void) {
+    pci_unregister_driver(&pci_driver);
+}
+
+int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
     int irqFlags = 0;
     u8 rb;
-    
+
     // Find the Xilinx PCIE device
+    /*
     gDev = pci_get_device(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
     if (NULL == gDev) {
         printk(KERN_WARNING"%s: Init: Hardware not found.\n", gDrvrName);
@@ -159,6 +186,8 @@ static int xpcie_init(void) {
     }
     else
         pci_dev_put(gDev);
+    */
+    gDev = dev;
     
     // Get Base Address of registers from pci structure. Should come from pci_dev
     // structure, but that element seems to be missing on the development system.
@@ -186,7 +215,7 @@ static int xpcie_init(void) {
     // Get IRQ from pci_dev structure. It may have been remapped by the kernel,
     // and this value will be the correct one.
     gIrq = gDev->irq;
-    printk(KERN_INFO"%s: Init: Device IRQ: %X\n",gDrvrName, gIrq);
+    printk(KERN_INFO"%s: Init: Device IRQ: %d\n",gDrvrName, gIrq);
     
     //---START: Initialize Hardware
     
@@ -220,8 +249,8 @@ static int xpcie_init(void) {
             printk(KERN_WARNING"%s: could not read IRQ number from configuration\n",gDrvrName);
             return (CRIT_ERR);
         }
-        gIrq = rb;
-        printk(KERN_INFO"%s: configuration space says IRQ number is %d\n",gDrvrName,gIrq);        
+        //gIrq = rb;
+        printk(KERN_INFO"%s: configuration space says IRQ number is %d\n",gDrvrName,(int)rb);
     }
     
     if (0 > request_irq(gIrq, (irq_handler_t) xpcie_irq_handler, irqFlags, gDrvrName, gDev)) {
@@ -282,24 +311,11 @@ void xpcie_initiator_reset() {
 
 //--- xpcie_init_card(): Initializes XBMD descriptor registers to default values
 void xpcie_init_card() {
-
   xpcie_initiator_reset();
-
-  /*
-  xpcie_write_reg(2, gWriteHWAddr);        // Write: Write DMA TLP Address register with starting address
-  xpcie_write_reg(3, 0x20);                // Write: Write DMA TLP Size register with default value (32dwords)
-  xpcie_write_reg(4, 0x2000);              // Write: Write DMA TLP Count register with default value (2000)
-  xpcie_write_reg(5, 0x00000000);          // Write: Write DMA TLP Pattern register with default value (0x0)
-
-  xpcie_write_reg(6, 0xfeedbeef);          // Write: Read DMA Expected Data Pattern with default value (feedbeef)
-  xpcie_write_reg(7, gReadHWAddr);         // Write: Read DMA TLP Address register with starting address.
-  xpcie_write_reg(8, 0x20);                // Write: Read DMA TLP Size register with default value (32dwords)
-  xpcie_write_reg(9, 0x2000);              // Write: Read DMA TLP Count register with default value (2000)
-  */
 }
 
-//--- xpcie_exit(): Performs any cleanup required before releasing the device
-static void xpcie_exit(void) {
+// Performs any cleanup required before releasing the device
+void xpcie_remove(struct pci_dev *dev) {
 
     // Flush the DMA workqueue and destroy it
     printk(KERN_INFO"%s: destroy workqueue\n", gDrvrName);
@@ -421,10 +437,7 @@ void xpcie_write_reg(u32 dw_offset, u32 val) {
     writel(val, (gBaseVirt + (4 * dw_offset)));
 }
 
-// Driver Entry Point
 module_init(xpcie_init);
-
-// Driver Exit Point
 module_exit(xpcie_exit);
 
 MODULE_LICENSE("Dual BSD/GPL");
