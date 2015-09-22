@@ -25,6 +25,9 @@
 // device can actually support more
 #define PCI_HW_DMA_MASK           0xffffffff
 
+// Use MSI or normal interrupts?
+#define PCI_USE_MSI               1
+
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
 #define REG_DDMACR    1  // Device DMA Control Register
@@ -38,13 +41,15 @@
 #define REG_RDMATLPC  9  // Read DMA TLP Count Register
 #define REG_RDMASTAT 12  // Read DMA Status Register
 
-// Register commands
-#define DCSR_RESET    0x1
-#define DCSR_ACTIVE   0x0
+// Register bits
+#define DCSR_RESET        1
+#define DCSR_ACTIVE       0
 #define DDMACR_WR_START   1
 #define DDMACR_WR_INTDIS (1 << 7)
+#define DDMACR_WR_DONE   (1 << 8)
 #define DDMACR_RD_START  (1 << 16 )
-#define DDMACR_RD_INTDIS (1 << 32 )
+#define DDMACR_RD_INTDIS (1 << 23 )
+#define DDMACR_RD_DONE   (1 << 24 )
 
 //Status flags indicating if resource was acquired
 #define HAVE_REGION 0x01                    // I/O Memory region
