@@ -72,14 +72,6 @@ int xpcie_open(struct inode *inode, struct file *filp) {
     }
 
     // Set up the first DMA transfer
-    // TEMP FIX ME: this is for the sample firmware only
-    // Write: Write DMA Expected Data Pattern with default value (feedbeef)    
-    xpcie_write_reg(REG_WDMATLPP, 0xfeedbeef);
-    // Write: Write DMA TLP Size register (32dwords)    
-    xpcie_write_reg(REG_WDMATLPS, 0x20);
-    // Write: Write DMA TLP Count register
-    xpcie_write_reg(REG_WDMATLPC, 0x0001);
-
     queue_work(dma_setup_wq, &dma_work);
 
     // Hold the semaphore    
@@ -285,7 +277,6 @@ static int xpcie_init(void) {
 void xpcie_initiator_reset() {
   // Reset device and then make it active
   xpcie_write_reg(REG_DCSR, DCSR_RESET);
-  wmb();  
   xpcie_write_reg(REG_DCSR, DCSR_ACTIVE);
 }
 
@@ -347,11 +338,14 @@ static void xpcie_exit(void) {
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
-    u32 reg;
     // Check that the DMA transfer is done
     // Otherwise this is probably not for us
-    reg = xpcie_read_reg(REG_DDMACR);
-    if (!(reg & DDMACR_WR_DONE))
+    //  u32 reg;
+    //reg = xpcie_read_reg(REG_DDMACR);    
+    //if (!(reg & DDMACR_WR_DONE))
+
+    // Check interrupt pending bit in PCI config space
+    if (!(PCI_USE_MSI) && (!pci_check_and_mask_intx(gDev)))
         return IRQ_NONE;
 
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
@@ -390,8 +384,16 @@ void dma_setup(struct work_struct *work) {
     // Write the PCIe write DMA address to the device
     xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
 
-    // Ensure address has made it
-    wmb();
+    // TEMP FIX ME: this is for the sample firmware only
+    // Write: Write DMA Expected Data Pattern with default value (feedbeef)    
+    xpcie_write_reg(REG_WDMATLPP, 0xfeedbeef);
+    // Write: Write DMA TLP Size register (32dwords)    
+    xpcie_write_reg(REG_WDMATLPS, 0x20);
+    // Write: Write DMA TLP Count register
+    xpcie_write_reg(REG_WDMATLPC, 0x0001);
+    
+    // Enable interrupts
+    pci_intx(gDev, 1);
 
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
