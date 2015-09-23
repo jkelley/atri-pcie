@@ -11,9 +11,8 @@
 #define EVTSIZE 512000
 
 int main(int argc, char **argv) {
-    int f;
+    int f, i, cnt;
     unsigned char *evtbuf;
-    int cnt;
 
     printf("ATRI PCIe read tester\n");
     
@@ -34,8 +33,10 @@ int main(int argc, char **argv) {
     printf("Trying to read up to %d bytes\n", EVTSIZE);
     cnt = read(f, evtbuf, EVTSIZE);
     printf("Got %d bytes\n", cnt);
-    
-    sleep(10);
+
+    for (i = 0; i < 32; i++)
+        printf("%02x ", evtbuf[i]);
+    printf("\n");
     
     close(f);
         

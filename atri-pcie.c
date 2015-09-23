@@ -14,6 +14,7 @@
 #include <linux/ioctl.h>
 #include <linux/sched.h>
 #include <linux/semaphore.h>
+#include <linux/spinlock.h>
 #include <linux/workqueue.h>
 #include <asm/uaccess.h>
 
@@ -27,15 +28,17 @@ unsigned long    gBaseLen;                   // Base register address Length
 void            *gBaseVirt = NULL;           // Base register address (Virtual address, for I/O).
 char             gDrvrName[]= "atri-pcie";   // Name of driver in proc.
 struct pci_dev  *gDev = NULL;                // PCI device structure.
-int              gIrq;                       // IRQ assigned by PCI system.
+
+// Test pattern counter
+int              gXferCount = 1;             // Debug test pattern counter
 
 // Device semaphores
-struct semaphore gSemOpen;
-struct semaphore gSemDMA;
-struct semaphore gSemRead;
 DEFINE_SEMAPHORE(gSemOpen);
 DEFINE_SEMAPHORE(gSemRead);
 DEFINE_SEMAPHORE(gSemDMA);
+
+// Interrupt spinlock
+DEFINE_SPINLOCK(gIrqLock);
 
 // Queue of DMA buffers for event transfer
 evtq           *gEvtQ = NULL;
@@ -170,7 +173,6 @@ static void __exit xpcie_exit(void) {
 int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
     int irqFlags = 0;
-    u8 rb;
 
     // Kernel has found a device for us
     gDev = dev;
@@ -203,14 +205,7 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
         return (CRIT_ERR);
     } 
     printk(KERN_INFO"%s: probe: Virt HW address %lX\n", gDrvrName, (unsigned long)gBaseVirt);
-    
-    // Get IRQ from pci_dev structure. It may have been remapped by the kernel,
-    // and this value will be the correct one.
-    gIrq = gDev->irq;
-    printk(KERN_INFO"%s: probe: Device IRQ: %d\n",gDrvrName, gIrq);
-    
-    //---START: Initialize Hardware
-    
+        
     // Check the memory region to see if it is in use
     if (0 > check_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE)) {
         printk(KERN_WARNING"%s: probe: Memory in use.\n", gDrvrName);
@@ -231,21 +226,15 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
         if (pci_enable_msi(gDev) < 0) {
             printk(KERN_WARNING"%s: probe: Unable to enable MSI",gDrvrName);    
             return (CRIT_ERR);
-        }
+        }        
+        printk(KERN_INFO"%s: MSI interrupt; device IRQ is %d\n", gDrvrName, gDev->irq);
     }
     else {
         irqFlags |= IRQF_SHARED;
-        // FIX ME this is probably unneccessary
-        // but interrupts are currently broken on endpoint
-        if (pci_read_config_byte(gDev, PCI_INTERRUPT_LINE, &rb) != 0) {
-            printk(KERN_WARNING"%s: could not read IRQ number from configuration\n",gDrvrName);
-            return (CRIT_ERR);
-        }
-        //gIrq = rb;
-        printk(KERN_INFO"%s: configuration space says IRQ number is %d\n",gDrvrName,(int)rb);
+        printk(KERN_INFO"%s: shared interrupt; device IRQ is %d\n", gDrvrName, gDev->irq);        
     }
     
-    if (0 > request_irq(gIrq, (irq_handler_t) xpcie_irq_handler, irqFlags, gDrvrName, gDev)) {
+    if (0 > request_irq(gDev->irq, (irq_handler_t) xpcie_irq_handler, irqFlags, gDrvrName, gDev)) {
         printk(KERN_WARNING"%s: probe: Unable to allocate IRQ",gDrvrName);
         return (CRIT_ERR);
     }
@@ -324,9 +313,10 @@ void xpcie_remove(struct pci_dev *dev) {
     
     // Check if we have an IRQ and free it
     printk(KERN_INFO"%s: Free IRQ\n",gDrvrName);  
-    pci_disable_msi(gDev);
     if (gStatFlags & HAVE_IRQ) {
-        (void) free_irq(gIrq, gDev);
+        free_irq(gDev->irq, gDev);
+        if (PCI_USE_MSI)
+            pci_disable_msi(gDev);    
     }
     
     // Free up memory pointed to by virtual address
@@ -350,6 +340,9 @@ void xpcie_remove(struct pci_dev *dev) {
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
+    //u8 istat;    
+    unsigned long flags;
+        
     // Check that the DMA transfer is done
     // Otherwise this is probably not for us
     // u32 reg;
@@ -357,12 +350,12 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     //if (!(reg & DDMACR_WR_DONE))
 
     // TEMP FIX ME check status
-    u8 istat;    
-    pci_read_config_byte(gDev, PCI_STATUS_INTERRUPT, &istat);
-    printk(KERN_INFO"%s: PCI interrupt status byte is %x\n", gDrvrName, istat);
+    //pci_read_config_byte(gDev, PCI_STATUS_INTERRUPT, &istat);
+    //printk(KERN_INFO"%s: PCI interrupt status byte is %x\n", gDrvrName, istat);
 
     // Disable interrupts
-    pci_intx(gDev, 0);
+    // THIS DOESN'T WORK?!
+    //pci_intx(gDev, 0);
     
     // Check interrupt pending bit in PCI config space
     /*
@@ -372,6 +365,8 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     }
     */
 
+    spin_lock_irqsave(&gIrqLock, flags);
+    
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
     // FIX ME read out the actual transfer length!
@@ -382,15 +377,19 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     // Data is now ready for processer. Increment the write pointer
     // and wake up and waiting reads
     gEvtQ->wr_idx++;
+    gXferCount++;
     wake_up_interruptible(&gEvtQ->rd_waitq);
    
     // Put the setup for the next write into a workqueue.
     // It can sleep so cannot be done here
 
     // TEMP FIX ME don't do this yet
+    // ALSO FIX ME: no lock with wr_idx increment here?!
     //queue_work(dma_setup_wq, &dma_work);
     
     printk(KERN_INFO"%s Interrupt Handler End ..\n", gDrvrName);
+
+    spin_unlock_irqrestore(&gIrqLock, flags);    
     return (irq_handler_t) IRQ_HANDLED;
 }
 
@@ -413,15 +412,15 @@ void dma_setup(struct work_struct *work) {
     xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
 
     // TEMP FIX ME: this is for the sample firmware only
-    // Write: Write DMA Expected Data Pattern with default value (feedbeef)    
-    xpcie_write_reg(REG_WDMATLPP, 0xfeedbeef);
+    // Write: Write DMA Expected Data Pattern with default value
+    xpcie_write_reg(REG_WDMATLPP, gXferCount);
     // Write: Write DMA TLP Size register (32dwords)    
     xpcie_write_reg(REG_WDMATLPS, 0x20);
     // Write: Write DMA TLP Count register
     xpcie_write_reg(REG_WDMATLPC, 0x0001);
     
     // Enable interrupts
-    pci_intx(gDev, 1);
+    //pci_intx(gDev, 1);
 
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);

@@ -25,8 +25,9 @@
 // device can actually support more
 #define PCI_HW_DMA_MASK           0xffffffff
 
-// Use MSI or normal interrupts?
-#define PCI_USE_MSI               0
+// Use MSI or normal shared interrupts?
+// WARNING: legacy interrupt handling is broken still
+#define PCI_USE_MSI               1
 
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
