@@ -59,7 +59,9 @@ static struct workqueue_struct *dma_setup_wq;
 static DECLARE_WORK(dma_work, dma_setup);
 
 //-----------------------------------------------------------------------------
-// Driver struct
+// PCI driver struct
+// defines main probe (initialization) and removal functions
+// to kernel along with devices IDs that we handle
 static struct pci_device_id ids[] = {
     { PCI_DEVICE(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE) },
     { 0, }
@@ -82,13 +84,6 @@ int xpcie_open(struct inode *inode, struct file *filp) {
     if (down_trylock(&gSemOpen))
         return -EINVAL;
 
-    gEvtQ = new_evtq(gDev);
-    if (gEvtQ == NULL) {
-        printk(KERN_ALERT"%s: Open: couldn't create event queue\n",gDrvrName);
-        up(&gSemOpen);
-        return -ENOMEM;
-    }
-
     // Set up the first DMA transfer
     queue_work(dma_setup_wq, &dma_work);
 
@@ -100,9 +95,9 @@ int xpcie_open(struct inode *inode, struct file *filp) {
 // Called when device is released
 int xpcie_release(struct inode *inode, struct file *filp) {
     // Reset the endpoint to stop any DMA activity
+    // TEMP FIX ME
     xpcie_dump_regs();
     xpcie_initiator_reset();
-    delete_evtq(gEvtQ);
     up(&gSemOpen);
     printk(KERN_INFO"%s: Release: module released\n",gDrvrName);    
     return SUCCESS;
@@ -177,51 +172,48 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     int irqFlags = 0;
     u8 rb;
 
-    // Find the Xilinx PCIE device
-    /*
-    gDev = pci_get_device(PCI_VENDOR_ID_XILINX, PCI_DEVICE_ID_XILINX_PCIE, gDev);
-    if (NULL == gDev) {
-        printk(KERN_WARNING"%s: Init: Hardware not found.\n", gDrvrName);
+    // Kernel has found a device for us
+    gDev = dev;
+
+    // Enable device
+    if (0 > pci_enable_device(gDev)) {
+        printk(KERN_WARNING"%s: probe: Device not enabled.\n", gDrvrName);
         return (CRIT_ERR);
     }
-    else
-        pci_dev_put(gDev);
-    */
-    gDev = dev;
     
     // Get Base Address of registers from pci structure. Should come from pci_dev
     // structure, but that element seems to be missing on the development system.
     gBaseHdwr = pci_resource_start(gDev, 0);
     
     if (0 > gBaseHdwr) {
-        printk(KERN_WARNING"%s: Init: Base Address not set.\n", gDrvrName);
+        printk(KERN_WARNING"%s: probe: Base Address not set.\n", gDrvrName);
         return (CRIT_ERR);
     } 
-    printk(KERN_INFO"%s: Init: Base hw val %lx\n", gDrvrName, (unsigned long)gBaseHdwr);
+    printk(KERN_INFO"%s: probe: Base hw val %lx\n", gDrvrName, (unsigned long)gBaseHdwr);
     
     // Get the Base Address Length
-    gBaseLen = pci_resource_len (gDev, 0);
-    printk(KERN_INFO"%s: Init: Base hw len %d\n", gDrvrName, (unsigned int)gBaseLen);
+    gBaseLen = pci_resource_len(gDev, 0);
+    printk(KERN_INFO"%s: probe: Base hw len %d\n", gDrvrName, (unsigned int)gBaseLen);
     
     // Remap the I/O register block so that it can be safely accessed.
     // I/O register block starts at gBaseHdwr and is 32 bytes long.
     gBaseVirt = ioremap(gBaseHdwr, gBaseLen);
     if (!gBaseVirt) {
-        printk(KERN_WARNING"%s: Init: Could not remap memory.\n", gDrvrName);
+        printk(KERN_WARNING"%s: probe: Could not remap memory.\n", gDrvrName);
         return (CRIT_ERR);
     } 
-    printk(KERN_INFO"%s: Init: Virt HW address %lX\n", gDrvrName, (unsigned long)gBaseVirt);
+    printk(KERN_INFO"%s: probe: Virt HW address %lX\n", gDrvrName, (unsigned long)gBaseVirt);
     
     // Get IRQ from pci_dev structure. It may have been remapped by the kernel,
     // and this value will be the correct one.
     gIrq = gDev->irq;
-    printk(KERN_INFO"%s: Init: Device IRQ: %d\n",gDrvrName, gIrq);
+    printk(KERN_INFO"%s: probe: Device IRQ: %d\n",gDrvrName, gIrq);
     
     //---START: Initialize Hardware
     
     // Check the memory region to see if it is in use
     if (0 > check_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE)) {
-        printk(KERN_WARNING"%s: Init: Memory in use.\n", gDrvrName);
+        printk(KERN_WARNING"%s: probe: Memory in use.\n", gDrvrName);
         return (CRIT_ERR);
     }
     
@@ -230,14 +222,14 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     // Update flags
     gStatFlags = gStatFlags | HAVE_REGION;
     
-    printk(KERN_INFO"%s: Init: Initialize Hardware Done..\n",gDrvrName);
+    printk(KERN_INFO"%s: probe: Initialize Hardware Done..\n",gDrvrName);
     
     printk(KERN_INFO"%s: IRQ Setup..\n", gDrvrName);
     // Request IRQ from OS
     // Try to get an MSI interrupt
     if (PCI_USE_MSI) {
         if (pci_enable_msi(gDev) < 0) {
-            printk(KERN_WARNING"%s: Init: Unable to enable MSI",gDrvrName);    
+            printk(KERN_WARNING"%s: probe: Unable to enable MSI",gDrvrName);    
             return (CRIT_ERR);
         }
     }
@@ -254,21 +246,15 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     }
     
     if (0 > request_irq(gIrq, (irq_handler_t) xpcie_irq_handler, irqFlags, gDrvrName, gDev)) {
-        printk(KERN_WARNING"%s: Init: Unable to allocate IRQ",gDrvrName);
+        printk(KERN_WARNING"%s: probe: Unable to allocate IRQ",gDrvrName);
         return (CRIT_ERR);
     }
     // Update flags stating IRQ was successfully obtained
     gStatFlags = gStatFlags | HAVE_IRQ;
-    
-    // Bus Master Enable
-    if (0 > pci_enable_device(gDev)) {
-        printk(KERN_WARNING"%s: Init: Device not enabled.\n", gDrvrName);
-        return (CRIT_ERR);
-    }
-    
+        
     // Set address range for DMA transfers
     if (pci_set_dma_mask(gDev, PCI_HW_DMA_MASK) < 0) {
-        printk(KERN_WARNING"%s: Init: DMA mask could not be set.\n", gDrvrName);
+        printk(KERN_WARNING"%s: probe: DMA mask could not be set.\n", gDrvrName);
         return (CRIT_ERR);
     }
     
@@ -278,10 +264,10 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     
     // Register with the kernel as a character device.
     if (0 > register_chrdev(gDrvrMajor, gDrvrName, &xpcie_intf)) {
-        printk(KERN_WARNING"%s: Init: will not register\n", gDrvrName);
+        printk(KERN_WARNING"%s: probe: will not register\n", gDrvrName);
         return (CRIT_ERR);
     }
-    printk(KERN_INFO"%s: Init: module registered\n", gDrvrName);
+    printk(KERN_INFO"%s: probe: module registered\n", gDrvrName);
     gStatFlags = gStatFlags | HAVE_KREG;
     
     //--- END: Register Driver
@@ -289,14 +275,21 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     // Create DMA workqueue
     dma_setup_wq = create_singlethread_workqueue("atri-pcie-dma-work");
     if (dma_setup_wq == NULL) {
-        printk(KERN_WARNING"%s: Init: couldn't create DMA workqueue\n", gDrvrName);
+        printk(KERN_WARNING"%s: probe: couldn't create DMA workqueue\n", gDrvrName);
         return (CRIT_ERR);
     }
     gStatFlags = gStatFlags | HAVE_WQ;
+
+    // Create event queue
+    gEvtQ = new_evtq(gDev);
+    if (gEvtQ == NULL) {
+        printk(KERN_ALERT"%s: Open: couldn't create event queue\n",gDrvrName);
+        return (CRIT_ERR);
+    }
     
-    printk(KERN_ALERT"%s driver is loaded\n", gDrvrName);
+    printk(KERN_ALERT"%s: driver is loaded\n", gDrvrName);
     
-    // Initializing card registers
+    // Initialize card registers
     xpcie_init_card();
     
     return 0;
@@ -348,6 +341,9 @@ void xpcie_remove(struct pci_dev *dev) {
         unregister_chrdev(gDrvrMajor, gDrvrName);
     }  
     gStatFlags = 0;
+
+    // Release event queue memory
+    delete_evtq(gEvtQ);
     
     printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
 }
@@ -356,15 +352,29 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
     // Check that the DMA transfer is done
     // Otherwise this is probably not for us
-    //  u32 reg;
+    // u32 reg;
     //reg = xpcie_read_reg(REG_DDMACR);    
     //if (!(reg & DDMACR_WR_DONE))
 
+    // TEMP FIX ME check status
+    u8 istat;    
+    pci_read_config_byte(gDev, PCI_STATUS_INTERRUPT, &istat);
+    printk(KERN_INFO"%s: PCI interrupt status byte is %x\n", gDrvrName, istat);
+
+    // Disable interrupts
+    pci_intx(gDev, 0);
+    
     // Check interrupt pending bit in PCI config space
-    if (!(PCI_USE_MSI) && (!pci_check_and_mask_intx(gDev)))
-        return IRQ_NONE;
+    /*
+    if (!(PCI_USE_MSI) && (!pci_check_and_mask_intx(gDev))) {        
+        // FIX ME plow ahead for now
+        //         return IRQ_NONE;
+    }
+    */
 
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
+
+    // FIX ME read out the actual transfer length!
     
     // Reset the initiator.  This also clears the DONE bit.
     xpcie_initiator_reset();
@@ -376,7 +386,9 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
    
     // Put the setup for the next write into a workqueue.
     // It can sleep so cannot be done here
-    queue_work(dma_setup_wq, &dma_work);
+
+    // TEMP FIX ME don't do this yet
+    //queue_work(dma_setup_wq, &dma_work);
     
     printk(KERN_INFO"%s Interrupt Handler End ..\n", gDrvrName);
     return (irq_handler_t) IRQ_HANDLED;

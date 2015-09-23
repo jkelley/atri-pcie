@@ -51,56 +51,9 @@
 #define DDMACR_RD_INTDIS (1 << 23 )
 #define DDMACR_RD_DONE   (1 << 24 )
 
-//Status flags indicating if resource was acquired
+//Status flags indicating if resource was acquired by driver
 #define HAVE_REGION 0x01                    // I/O Memory region
 #define HAVE_IRQ    0x02                    // Interupt
 #define HAVE_KREG   0x04                    // Kernel registration
 #define HAVE_WQ     0x08                    // DMA work queue
 
-// IOCTRL commands
-enum {
-  INITCARD,
-  INITRST,
-  DISPREGS,
-  RDDCSR,
-  RDDDMACR,
-  RDWDMATLPA,
-  RDWDMATLPS,
-  RDWDMATLPC,
-  RDWDMATLPP,
-  RDRDMATLPP,
-  RDRDMATLPA,
-  RDRDMATLPS,
-  RDRDMATLPC,
-  RDWDMAPERF,
-  RDRDMAPERF,
-  RDRDMASTAT,
-  RDNRDCOMP,
-  RDRCOMPDSIZE,
-  RDDLWSTAT,
-  RDDLTRSSTAT,
-  RDDMISCCONT,
-  RDDMISCONT,
-  RDDLNKC,
-  DFCCTL,
-  DFCPINFO,
-  DFCNPINFO,
-  DFCINFO,
-
-  // RDCFGREG,
-  // WRCFGREG,
-  // RDBMDREG,
-  // WRBMDREG,
-
-  WRDDMACR,
-  WRWDMATLPS,
-  WRWDMATLPC,
-  WRWDMATLPP,
-  WRRDMATLPS,
-  WRRDMATLPC,
-  WRRDMATLPP,
-  WRDMISCCONT,
-  WRDDLNKC,
-  
-  NUMCOMMANDS
-};
