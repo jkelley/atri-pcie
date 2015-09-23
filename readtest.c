@@ -1,5 +1,5 @@
 /*
- * Read the ATRI PCI device and spit out the results
+ * Read the ATRI PCI device and spit out the results.
  */
 
 #include <stdio.h>
@@ -8,16 +8,22 @@
 #include <fcntl.h>
 
 #define DEVNAME "/dev/atri-pcie"
-#define EVTSIZE 512000
+#define MAXEVTSIZE 512000
 
 int main(int argc, char **argv) {
-    int f, i, cnt;
+    int f, i, j, cnt, nevts;
     unsigned char *evtbuf;
 
-    printf("ATRI PCIe read tester\n");
+    if (argc != 2) {
+        printf("Usage: %s <# of events>\n", argv[0]);
+        return 0;
+    }
+
+    nevts = atoi(argv[1]);
+    printf("ATRI PCIe read tester: getting %d events\n", nevts);
     
     // Allocate memory for the event buffer
-    evtbuf = (unsigned char *)malloc(EVTSIZE);
+    evtbuf = (unsigned char *)malloc(MAXEVTSIZE);
     if (evtbuf == NULL) {
         printf("Error: couldn't allocate event memory.\n");
         return -1;
@@ -30,15 +36,18 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    printf("Trying to read up to %d bytes\n", EVTSIZE);
-    cnt = read(f, evtbuf, EVTSIZE);
-    printf("Got %d bytes\n", cnt);
+    // Loop and read as many events as requested
+    // Print out the first few bytes of each
+    for (i = 0; i < nevts; i++) {
+        cnt = read(f, evtbuf, MAXEVTSIZE);
+        printf("Event %d: got %d bytes\n", i+1, cnt);
 
-    for (i = 0; i < 32; i++)
-        printf("%02x ", evtbuf[i]);
-    printf("\n");
+        for (j = 0; j < 32; j++)
+            printf("%02x ", evtbuf[j]);
+        printf("\n");
+
+    }
     
-    close(f);
-        
+    close(f);        
     return 0;
 }

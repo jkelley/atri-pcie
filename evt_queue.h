@@ -18,7 +18,7 @@
 typedef struct {
     unsigned char *buf;
     dma_addr_t physaddr;
-    size_t len;
+    size_t len; 
 } evtbuf;
 
 typedef struct {
@@ -47,7 +47,7 @@ void delete_evtq(evtq *q) {
     for (i = 0; i < NEVT; i++) {
         evtbuf *eb = evtq_getevent(q, i);
         if (eb->buf != NULL)
-            pci_free_consistent(q->dev, eb->len, eb->buf, eb->physaddr);
+            pci_free_consistent(q->dev, EVTBUFSIZE, eb->buf, eb->physaddr);
     }
     kfree(q);
     q = NULL;
@@ -74,7 +74,7 @@ evtq *new_evtq(struct pci_dev *dev) {
         evtbuf *eb = evtq_getevent(q, i);
         eb->buf = pci_alloc_consistent(dev, EVTBUFSIZE, &eb->physaddr);
         failed |= (eb->buf == NULL);
-        eb->len = EVTBUFSIZE;
+        eb->len = 0;
     }
     if (failed) {
         printk(KERN_WARNING"new_evtq: allocations failed!\n");             

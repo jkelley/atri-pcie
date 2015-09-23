@@ -52,6 +52,9 @@
 #define DDMACR_RD_INTDIS (1 << 23 )
 #define DDMACR_RD_DONE   (1 << 24 )
 
+#define DMA_TLP_SIZE_MASK 0x1fff
+#define DMA_TLP_CNT_MASK  0xffff
+
 //Status flags indicating if resource was acquired by driver
 #define HAVE_REGION 0x01                    // I/O Memory region
 #define HAVE_IRQ    0x02                    // Interupt

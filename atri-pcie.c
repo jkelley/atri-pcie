@@ -28,6 +28,7 @@ unsigned long    gBaseLen;                   // Base register address Length
 void            *gBaseVirt = NULL;           // Base register address (Virtual address, for I/O).
 char             gDrvrName[]= "atri-pcie";   // Name of driver in proc.
 struct pci_dev  *gDev = NULL;                // PCI device structure.
+int              gDie = 0;                   // Global shutdown flag to die gracefully
 
 // Test pattern counter
 int              gXferCount = 1;             // Debug test pattern counter
@@ -115,7 +116,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
         return -ERESTARTSYS;
 
     // Check if event queue is empty 
-    while (evtq_isempty(gEvtQ)) {
+    while (evtq_isempty(gEvtQ) && !gDie) {
         up(&gSemRead); 
 
         // If we're non blocking, return
@@ -131,6 +132,12 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
             return -ERESTARTSYS;
     }
 
+    // If we're about to shutdown, don't go any further
+    if (gDie) {
+        up(&gSemRead);
+        return 0;
+    }
+    
     eb = evtq_getevent(gEvtQ, gEvtQ->rd_idx);
 
     // Make sure buffer is large enough    
@@ -296,9 +303,20 @@ void xpcie_init_card() {
   xpcie_initiator_reset();
 }
 
-// Performs any cleanup required before releasing the device
+// Performs any cleanup required before removing the device
 void xpcie_remove(struct pci_dev *dev) {
 
+    // Set the shutdown flag
+    gDie = 1;
+    
+    // Wake up any sleeping DMA setup and reads and don't restart
+    printk(KERN_INFO"%s: empty event queue\n", gDrvrName);    
+    if (gEvtQ != NULL) {
+        wake_up_interruptible(&gEvtQ->wr_waitq);
+        wake_up_interruptible(&gEvtQ->rd_waitq);
+        empty_evtq(gEvtQ);
+    }
+        
     // Flush the DMA workqueue and destroy it
     printk(KERN_INFO"%s: destroy workqueue\n", gDrvrName);
     if (gStatFlags & HAVE_WQ) {
@@ -340,36 +358,20 @@ void xpcie_remove(struct pci_dev *dev) {
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
-    //u8 istat;    
     unsigned long flags;
-        
-    // Check that the DMA transfer is done
-    // Otherwise this is probably not for us
-    // u32 reg;
-    //reg = xpcie_read_reg(REG_DDMACR);    
-    //if (!(reg & DDMACR_WR_DONE))
-
-    // TEMP FIX ME check status
-    //pci_read_config_byte(gDev, PCI_STATUS_INTERRUPT, &istat);
-    //printk(KERN_INFO"%s: PCI interrupt status byte is %x\n", gDrvrName, istat);
-
-    // Disable interrupts
-    // THIS DOESN'T WORK?!
-    //pci_intx(gDev, 0);
+    u32 tlp_size, tlp_cnt;
+    evtbuf *eb;
     
-    // Check interrupt pending bit in PCI config space
-    /*
-    if (!(PCI_USE_MSI) && (!pci_check_and_mask_intx(gDev))) {        
-        // FIX ME plow ahead for now
-        //         return IRQ_NONE;
-    }
-    */
-
+    // WARNING: only MSI interrupts working currently    
     spin_lock_irqsave(&gIrqLock, flags);
     
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
-    // FIX ME read out the actual transfer length!
+    // Read out the actual transfer length and set in event
+    tlp_size = xpcie_read_reg(REG_WDMATLPS) & DMA_TLP_SIZE_MASK;
+    tlp_cnt = xpcie_read_reg(REG_WDMATLPC) & DMA_TLP_CNT_MASK;    
+    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
+    eb->len = tlp_size*tlp_cnt*4;
     
     // Reset the initiator.  This also clears the DONE bit.
     xpcie_initiator_reset();
@@ -383,10 +385,9 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     // Put the setup for the next write into a workqueue.
     // It can sleep so cannot be done here
 
-    // TEMP FIX ME don't do this yet
-    // ALSO FIX ME: no lock with wr_idx increment here?!
-    //queue_work(dma_setup_wq, &dma_work);
-    
+    // FIX ME: no lock with wr_idx increment here?!
+    queue_work(dma_setup_wq, &dma_work);
+    printk(KERN_INFO"%s evt_queue: %d events\n", gDrvrName, evtq_entries(gEvtQ));
     printk(KERN_INFO"%s Interrupt Handler End ..\n", gDrvrName);
 
     spin_unlock_irqrestore(&gIrqLock, flags);    
@@ -401,9 +402,15 @@ void dma_setup(struct work_struct *work) {
         return;
 
     // If the queue is full, wait until it is not    
-    while (evtq_isfull(gEvtQ)) {
+    while (evtq_isfull(gEvtQ) && !gDie) {
         if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
             continue;
+    }
+
+    // If we're about to shutdown, don't go any further
+    if (gDie) {
+        up(&gSemDMA);
+        return;
     }
 
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
@@ -419,9 +426,6 @@ void dma_setup(struct work_struct *work) {
     // Write: Write DMA TLP Count register
     xpcie_write_reg(REG_WDMATLPC, 0x0001);
     
-    // Enable interrupts
-    //pci_intx(gDev, 1);
-
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
     up(&gSemDMA);    

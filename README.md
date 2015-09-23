@@ -27,6 +27,11 @@ $ sudo make device
 
 or simply `sudo make all`.
 
+Install
+---
+
+The driver can be loaded with `sudo insmod atri-pcie.ko`.
+
 Testing
 ---
 
