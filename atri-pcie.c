@@ -30,6 +30,7 @@ void            *gBaseVirt = NULL;           // Base register address (Virtual a
 char             gDrvrName[]= "atri-pcie";   // Name of driver in proc.
 struct pci_dev  *gDev = NULL;                // PCI device structure.
 int              gDie = 0;                   // Global shutdown flag to die gracefully
+int              gReadAbort = 0;             // Global read abort flag when released
 
 // Test pattern counter
 int              gXferCount = 1;             // Debug test pattern counter
@@ -83,23 +84,26 @@ static struct pci_driver pci_driver = {
 int xpcie_open(struct inode *inode, struct file *filp) {
 
     // Limit to one reader at a time
+    // Hold the semaphore until close    
     if (down_trylock(&gSemOpen))
         return -EINVAL;
 
+    // Reset any previous abort   
+    gReadAbort = 0;
+    
     // Set up the first DMA transfer
     queue_work(dma_setup_wq, &dma_work);
 
-    // Hold the semaphore    
     printk(KERN_INFO"%s: Open: module opened\n",gDrvrName);    
     return SUCCESS;
 }
 
-// Called when device is released
+// Called when device file is closed
 int xpcie_release(struct inode *inode, struct file *filp) {
-    // TEMP FIX ME
-    xpcie_dump_regs();
+    gReadAbort = 1;
+    wake_up_interruptible(&gEvtQ->rd_waitq);    
     up(&gSemOpen);
-    printk(KERN_INFO"%s: Release: module released\n",gDrvrName);    
+    printk(KERN_INFO"%s: Release: device released\n",gDrvrName);    
     return SUCCESS;
 }
 
@@ -112,7 +116,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
         return -ERESTARTSYS;
 
     // Check if event queue is empty 
-    while (evtq_isempty(gEvtQ) && !gDie) {
+    while (evtq_isempty(gEvtQ) && !gReadAbort) {
         up(&gSemRead); 
 
         // If we're non blocking, return
@@ -129,7 +133,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     }
 
     // If we're about to shutdown, don't go any further
-    if (gDie) {
+    if (gReadAbort) {
         up(&gSemRead);
         return 0;
     }
@@ -307,8 +311,8 @@ void xpcie_init_card() {
 // Performs any cleanup required before removing the device
 void xpcie_remove(struct pci_dev *dev) {
 
-    // Set the shutdown flag
-    gDie = 1;
+    // Set the shutdown flags
+    gReadAbort = gDie = 1;
     
     // Wake up any sleeping DMA setup and reads and don't restart
     printk(KERN_INFO"%s: empty event queue\n", gDrvrName);    
