@@ -38,7 +38,6 @@ int              gXferCount = 1;             // Debug test pattern counter
 // Device semaphores
 DEFINE_SEMAPHORE(gSemOpen);
 DEFINE_SEMAPHORE(gSemRead);
-DEFINE_SEMAPHORE(gSemDMA);
 
 // Queue of DMA buffers for event transfer
 evtq           *gEvtQ = NULL;
@@ -315,47 +314,50 @@ void xpcie_remove(struct pci_dev *dev) {
     gReadAbort = gDie = 1;
     
     // Wake up any sleeping DMA setup and reads and don't restart
-    printk(KERN_INFO"%s: empty event queue\n", gDrvrName);    
     if (gEvtQ != NULL) {
+        printk(KERN_INFO"%s: empty event queue\n", gDrvrName);
         wake_up_interruptible(&gEvtQ->wr_waitq);
         wake_up_interruptible(&gEvtQ->rd_waitq);
         empty_evtq(gEvtQ);
     }
         
     // Flush the DMA workqueue and destroy it
-    printk(KERN_INFO"%s: destroy workqueue\n", gDrvrName);
     if (gStatFlags & HAVE_WQ) {
+        printk(KERN_INFO"%s: destroy workqueue\n", gDrvrName);        
         flush_workqueue(dma_setup_wq);
         destroy_workqueue(dma_setup_wq);
     }
     
-    printk(KERN_INFO"%s: Release memory\n",gDrvrName);
     // Check if we have a memory region and free it
-    if (gStatFlags & HAVE_REGION)
-        (void) release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
+    if (gStatFlags & HAVE_REGION) {
+        printk(KERN_INFO"%s: release memory\n",gDrvrName);        
+        release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
+    }
     
     // Check if we have an IRQ and free it
-    printk(KERN_INFO"%s: Free IRQ\n",gDrvrName);  
     if (gStatFlags & HAVE_IRQ) {
+        printk(KERN_INFO"%s: free IRQ %d\n",gDrvrName, gDev->irq);    
         free_irq(gDev->irq, gDev);
         if (PCI_USE_MSI)
             pci_disable_msi(gDev);    
     }
     
     // Free up memory pointed to by virtual address
-    printk(KERN_INFO"%s: unmap memory\n",gDrvrName);  
-    if (gBaseVirt != NULL)
-        iounmap(gBaseVirt);    
-    gBaseVirt = NULL;
+    if (gBaseVirt != NULL) {
+        printk(KERN_INFO"%s: unmap memory\n",gDrvrName);          
+        iounmap(gBaseVirt);
+        gBaseVirt = NULL;
+    }
     
     // Unregister Device Driver
-    printk(KERN_DEBUG"%s: unregister driver\n",gDrvrName);    
     if (gStatFlags & HAVE_KREG) {
+        printk(KERN_INFO"%s: unregister driver\n",gDrvrName);        
         unregister_chrdev(gDrvrMajor, gDrvrName);
     }  
     gStatFlags = 0;
 
     // Release event queue memory
+    printk(KERN_INFO"%s: delete event queue structure\n",gDrvrName);
     delete_evtq(gEvtQ);
     
     printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
@@ -378,14 +380,12 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
     eb->len = tlp_size*tlp_cnt*4;
     
-    // Reset the initiator.  This also clears the DONE bit.
-    xpcie_initiator_reset();
-    
     // Data is now ready for processer. Increment the write pointer
     // and wake up and waiting reads
     gEvtQ->wr_idx++;
     gXferCount++;
-
+    gEvtQ->dma_started = 0;
+    
     spin_unlock_irqrestore(&gEvtQ->lock, flags);    
     
     wake_up_interruptible(&gEvtQ->rd_waitq);
@@ -404,27 +404,44 @@ void dma_setup(struct work_struct *work) {
     u32 tlp_cnt;
     
     printk(KERN_INFO"%s: DMA write setup\n", gDrvrName);
-   
-    //if (down_interruptible(&gSemDMA))
-    //    return;
-
-    // If the queue is full, wait until it is not    
-    while (evtq_isfull(gEvtQ) && !gDie) {
-        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
-            continue;
-    }
-
-    // If we're about to shutdown, don't go any further
-    if (gDie) {
-        //up(&gSemDMA);
-        return;
-    }
 
     // This part is locked against the top half of the interrupt
     // handler.  Otherwise we could send the wrong address.
     spin_lock(&gEvtQ->lock);
+
+    // Have we already done this, but not received an interrupt?
+    if (gEvtQ->dma_started) {
+        printk(KERN_WARNING"%s: dma_setup: DMA is already in progress, not starting another!\n",gDrvrName);
+        spin_unlock(&gEvtQ->lock);
+        return;        
+    }
+    
+    // If the queue is full, wait until it is not    
+    while (evtq_isfull(gEvtQ) && !gDie) {
+        // but don't hold the lock
+        spin_unlock(&gEvtQ->lock);
+        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
+            continue;
+        // Reaquire lock
+        spin_lock(&gEvtQ->lock);
+    }
+
+    // If we're about to shutdown, don't go any further
+    if (gDie) {
+        spin_unlock(&gEvtQ->lock);
+        return;
+    }
+
+    // FIX ME check the DONE status
+    printk(KERN_INFO"%s: DMA is%s done\n", gDrvrName,
+           (xpcie_read_reg(REG_DDMACR) & DDMACR_WR_DONE) ? "" : " NOT");
+
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
     printk(KERN_INFO"%s: DMA setup address: %lx\n", gDrvrName, (unsigned long)eb->physaddr);
+
+    // Reset the initiator.  This also clears the DONE bit.
+    xpcie_initiator_reset();
+    
     // Write the PCIe write DMA address to the device
     xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
 
@@ -441,8 +458,11 @@ void dma_setup(struct work_struct *work) {
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
     mmiowb();
+
+    // Record that we've started a DMA
+    gEvtQ->dma_started = 1;
+    
     spin_unlock(&gEvtQ->lock);    
-    //up(&gSemDMA);    
 }
 
 void xpcie_dump_regs(void) {

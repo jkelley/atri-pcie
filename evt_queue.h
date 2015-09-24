@@ -29,6 +29,7 @@ typedef struct {
     wait_queue_head_t rd_waitq;
     wait_queue_head_t wr_waitq;
     spinlock_t lock;
+    int dma_started; // protect by lock
 } evtq;
 
 inline evtbuf *evtq_getevent(evtq *q, unsigned i) { return &(q->evt[i&EVTQMASK]); }
@@ -36,7 +37,7 @@ inline int evtq_entries(evtq *q) { return q->wr_idx - q->rd_idx; }
 inline int evtq_isfull(evtq *q)  { return NEVT == evtq_entries(q); }
 inline int evtq_isempty(evtq *q) { return q->wr_idx == q->rd_idx; }
 inline void empty_evtq(evtq *q) { q->wr_idx = q->rd_idx = 0; }
-
+    
 /* 
  * delete_evtq: clean up all memory allocated for the event queue. 
  */
@@ -88,6 +89,7 @@ evtq *new_evtq(struct pci_dev *dev) {
     init_waitqueue_head(&q->wr_waitq);
     init_waitqueue_head(&q->rd_waitq);
     spin_lock_init(&q->lock);
+    q->dma_started = 0;
     return q;
 }
 
