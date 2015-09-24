@@ -294,7 +294,9 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 void xpcie_initiator_reset() {
   // Reset device and then make it active
   xpcie_write_reg(REG_DCSR, DCSR_RESET);
+  mmiowb();
   xpcie_write_reg(REG_DCSR, DCSR_ACTIVE);
+  mmiowb();
 }
 
 //--- xpcie_init_card(): Initializes XBMD descriptor registers to default values
@@ -430,9 +432,11 @@ void dma_setup(struct work_struct *work) {
     // Write: Write DMA TLP Count register (randomize!)
     get_random_bytes(&tlp_cnt, 4);
     xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
+    mmiowb();
     
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
+    mmiowb();
     spin_unlock(&gEvtQ->lock);    
     //up(&gSemDMA);    
 }
