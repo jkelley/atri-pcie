@@ -16,6 +16,7 @@
 #include <linux/semaphore.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
+#include <linux/random.h>
 #include <asm/uaccess.h>
 
 #include "evt_queue.h"
@@ -37,9 +38,6 @@ int              gXferCount = 1;             // Debug test pattern counter
 DEFINE_SEMAPHORE(gSemOpen);
 DEFINE_SEMAPHORE(gSemRead);
 DEFINE_SEMAPHORE(gSemDMA);
-
-// Interrupt spinlock
-DEFINE_SPINLOCK(gIrqLock);
 
 // Queue of DMA buffers for event transfer
 evtq           *gEvtQ = NULL;
@@ -98,10 +96,8 @@ int xpcie_open(struct inode *inode, struct file *filp) {
 
 // Called when device is released
 int xpcie_release(struct inode *inode, struct file *filp) {
-    // Reset the endpoint to stop any DMA activity
     // TEMP FIX ME
     xpcie_dump_regs();
-    xpcie_initiator_reset();
     up(&gSemOpen);
     printk(KERN_INFO"%s: Release: module released\n",gDrvrName);    
     return SUCCESS;
@@ -152,7 +148,10 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     
     // Once event has been read, increment the read pointer.
     // Wake up any sleeping write preparation.
+    spin_lock(&gEvtQ->lock);    
     gEvtQ->rd_idx++;
+    spin_unlock(&gEvtQ->lock);
+    
     up(&gSemRead);
     wake_up_interruptible(&gEvtQ->wr_waitq);
     
@@ -363,7 +362,7 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     evtbuf *eb;
     
     // WARNING: only MSI interrupts working currently    
-    spin_lock_irqsave(&gIrqLock, flags);
+    spin_lock_irqsave(&gEvtQ->lock, flags);
     
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
@@ -380,26 +379,28 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     // and wake up and waiting reads
     gEvtQ->wr_idx++;
     gXferCount++;
+
+    spin_unlock_irqrestore(&gEvtQ->lock, flags);    
+    
     wake_up_interruptible(&gEvtQ->rd_waitq);
    
     // Put the setup for the next write into a workqueue.
     // It can sleep so cannot be done here
-
-    // FIX ME: no lock with wr_idx increment here?!
     queue_work(dma_setup_wq, &dma_work);
     printk(KERN_INFO"%s evt_queue: %d events\n", gDrvrName, evtq_entries(gEvtQ));
     printk(KERN_INFO"%s Interrupt Handler End ..\n", gDrvrName);
 
-    spin_unlock_irqrestore(&gIrqLock, flags);    
     return (irq_handler_t) IRQ_HANDLED;
 }
 
 void dma_setup(struct work_struct *work) {
     evtbuf *eb;
+    u32 tlp_cnt;
+    
     printk(KERN_INFO"%s: DMA write setup\n", gDrvrName);
-
-    if (down_interruptible(&gSemDMA))
-        return;
+   
+    //if (down_interruptible(&gSemDMA))
+    //    return;
 
     // If the queue is full, wait until it is not    
     while (evtq_isfull(gEvtQ) && !gDie) {
@@ -409,10 +410,13 @@ void dma_setup(struct work_struct *work) {
 
     // If we're about to shutdown, don't go any further
     if (gDie) {
-        up(&gSemDMA);
+        //up(&gSemDMA);
         return;
     }
 
+    // This part is locked against the top half of the interrupt
+    // handler.  Otherwise we could send the wrong address.
+    spin_lock(&gEvtQ->lock);
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
     printk(KERN_INFO"%s: DMA setup address: %lx\n", gDrvrName, (unsigned long)eb->physaddr);
     // Write the PCIe write DMA address to the device
@@ -421,14 +425,16 @@ void dma_setup(struct work_struct *work) {
     // TEMP FIX ME: this is for the sample firmware only
     // Write: Write DMA Expected Data Pattern with default value
     xpcie_write_reg(REG_WDMATLPP, gXferCount);
-    // Write: Write DMA TLP Size register (32dwords)    
-    xpcie_write_reg(REG_WDMATLPS, 0x20);
-    // Write: Write DMA TLP Count register
-    xpcie_write_reg(REG_WDMATLPC, 0x0001);
+    // Write: Write DMA TLP Size register (4 dwords)
+    xpcie_write_reg(REG_WDMATLPS, 0x4);
+    // Write: Write DMA TLP Count register (randomize!)
+    get_random_bytes(&tlp_cnt, 4);
+    xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
     
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
-    up(&gSemDMA);    
+    spin_unlock(&gEvtQ->lock);    
+    //up(&gSemDMA);    
 }
 
 void xpcie_dump_regs(void) {

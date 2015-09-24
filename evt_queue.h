@@ -28,6 +28,7 @@ typedef struct {
     unsigned wr_idx;
     wait_queue_head_t rd_waitq;
     wait_queue_head_t wr_waitq;
+    spinlock_t lock;
 } evtq;
 
 inline evtbuf *evtq_getevent(evtq *q, unsigned i) { return &(q->evt[i&EVTQMASK]); }
@@ -86,6 +87,7 @@ evtq *new_evtq(struct pci_dev *dev) {
     empty_evtq(q);
     init_waitqueue_head(&q->wr_waitq);
     init_waitqueue_head(&q->rd_waitq);
+    spin_lock_init(&q->lock);
     return q;
 }
 
