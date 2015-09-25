@@ -2,6 +2,10 @@
 Linux device driver for use with the ARA (Askaryan Radio Array) ATRI PCIe
 link.  Targeted for 3.4 kernel; compiled but not tested on 3.10 kernel.
 
+The PCIe firmware this is paired with, along with small bits of this driver,
+are initially based on the Xilinx Application Note XAPP1052, the PCIe DMA
+performance demo.
+
 Intro
 ---
 
