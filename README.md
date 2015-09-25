@@ -30,7 +30,18 @@ or simply `sudo make all`.
 Install
 ---
 
-The driver can be loaded with `sudo insmod atri-pcie.ko`.
+After a reboot the device files have to recreated with `sudo make device`.
+To see all of the driver debug messages in `/var/log/kern.log`, make sure
+the kernel print level is set to at least 6 (KERN_INFO), using the
+following:
+
+<pre><code>
+$ sudo bash
+# echo 6 > /proc/sys/kernel/printk
+</code><pre>
+
+Finally, the driver can be loaded with `sudo insmod atri-pcie.ko`.
+Messages in `/var/log/kern.log` will indicate if this is successful.
 
 Testing
 ---
@@ -42,4 +53,9 @@ spit out the first few bytes of each.
 <pre><code>
 $ ./readtest 10
 </code></pre>
+
+Once these events are read, the driver will continue issuing DMA requests
+to the endpoint until the driver's internal ring buffer is full.  Then, it
+will wait for the reader to empty some space so it can continue.
+
 

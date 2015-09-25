@@ -460,7 +460,7 @@ void dma_setup(struct work_struct *work) {
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
 
     // Reset the initiator.  This also clears the DONE bit.
-    // FIX ME: is this necessary?
+    // This seems to be necessary
     xpcie_initiator_reset();
     
     // Write the PCIe write DMA address to the device
