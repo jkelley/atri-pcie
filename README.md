@@ -1,6 +1,6 @@
 # atri-pcie
-Linux device driver for use with the ARA ATRI PCIe link
-Targeted for kernel v3.4.x.
+Linux device driver for use with the ARA (Askaryan Radio Array) ATRI PCIe
+link.  Targeted for 3.4 kernel; compiled but not tested on 3.10 kernel.
 
 Intro
 ---
@@ -38,7 +38,7 @@ following:
 <pre><code>
 $ sudo bash
 # echo 6 > /proc/sys/kernel/printk
-</code><pre>
+</code></pre>
 
 Finally, the driver can be loaded with `sudo insmod atri-pcie.ko`.
 Messages in `/var/log/kern.log` will indicate if this is successful.
