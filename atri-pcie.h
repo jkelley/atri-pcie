@@ -29,6 +29,9 @@
 // WARNING: legacy interrupt handling is broken still
 #define PCI_USE_MSI               1
 
+// Timer duration for lost interrupt (ms)
+#define IRQ_TIMEOUT_MS            1000
+
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
 #define REG_DDMACR    1  // Device DMA Control Register

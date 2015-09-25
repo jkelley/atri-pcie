@@ -17,10 +17,11 @@
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
 #include <linux/random.h>
+#include <linux/timer.h>
 #include <asm/uaccess.h>
 
-#include "evt_queue.h"
 #include "atri-pcie.h"
+#include "evt_queue.h"
 
 int              gDrvrMajor = 241;           // Major number not dynamic.
 unsigned int     gStatFlags = 0x00;          // Status flags used for cleanup.
@@ -39,7 +40,10 @@ int              gXferCount = 1;             // Debug test pattern counter
 DEFINE_SEMAPHORE(gSemOpen);
 DEFINE_SEMAPHORE(gSemRead);
 
-// Queue of DMA buffers for event transfer
+// Dropped interrupt timer (seems to indeed happen!)
+static struct timer_list irq_timer;
+
+//  DMA ring buffer for event transfer
 evtq           *gEvtQ = NULL;
 
 //-----------------------------------------------------------------------------
@@ -47,11 +51,14 @@ evtq           *gEvtQ = NULL;
 //-----------------------------------------------------------------------------
 
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs);
+void irq_timer_callback(unsigned long data);
 void xpcie_dump_regs(void);
 u32 xpcie_read_reg(u32 dw_offset);
 void xpcie_write_reg(u32 dw_offset, u32 val);
 void xpcie_init_card(void);
 void xpcie_initiator_reset(void);
+unsigned int xpcie_get_transfer_size(void);
+int xpcie_dma_wr_done(void);
 void xpcie_remove(struct pci_dev *dev);
 int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id);
 void dma_setup(struct work_struct *work);
@@ -79,7 +86,9 @@ static struct pci_driver pci_driver = {
 };
 
 //-----------------------------------------------------------------------------
-// Called with device is opened
+// Device open / close (release)
+//
+
 int xpcie_open(struct inode *inode, struct file *filp) {
 
     // Limit to one reader at a time
@@ -97,15 +106,21 @@ int xpcie_open(struct inode *inode, struct file *filp) {
     return SUCCESS;
 }
 
-// Called when device file is closed
 int xpcie_release(struct inode *inode, struct file *filp) {
+
+    // Bail out of any waiting reads
     gReadAbort = 1;
     wake_up_interruptible(&gEvtQ->rd_waitq);    
+
+    // Release the single-reader lock
     up(&gSemOpen);
     printk(KERN_INFO"%s: Release: device released\n",gDrvrName);    
     return SUCCESS;
 }
 
+//-----------------------------------------------------------------------------
+// Device read
+//
 ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
     evtbuf *eb;
@@ -162,11 +177,13 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     return eb->len;
 }
 
-// Aliasing write, read, ioctl, etc...
+//-----------------------------------------------------------------------------
+// Module file operations and init/exit.  Real initialization and exit
+// done by probe/remove; this just registers the driver structure.
+//
+
 struct file_operations xpcie_intf = {
     read:           xpcie_read,
-    // write:          xpcie_Write_Orig,
-    // unlocked_ioctl: xpcie_Ioctl,
     open:           xpcie_open,
     release:        xpcie_release,
 };
@@ -179,6 +196,10 @@ static void __exit xpcie_exit(void) {
     pci_unregister_driver(&pci_driver);
 }
 
+//-----------------------------------------------------------------------------
+// Device probe and remove: since we're not hotplugging, called on
+// module load and remove
+//
 int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
     int irqFlags = 0;
@@ -285,31 +306,23 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
         return (CRIT_ERR);
     }
     
-    printk(KERN_ALERT"%s: driver is loaded\n", gDrvrName);
-    
     // Initialize card registers
     xpcie_init_card();
-    
+
+    // Set up (but don't arm) interrupt timer
+    setup_timer(&irq_timer, irq_timer_callback, 0);
+
+    printk(KERN_ALERT"%s: driver is loaded\n", gDrvrName);
+        
     return 0;
-}
-
-//--- xpcie_initiator_reset(): Resets the Xilinx reference design
-void xpcie_initiator_reset() {
-  // Reset device and then make it active
-  xpcie_write_reg(REG_DCSR, DCSR_RESET);
-  mmiowb();
-  xpcie_write_reg(REG_DCSR, DCSR_ACTIVE);
-  mmiowb();
-}
-
-//--- xpcie_init_card(): Initializes XBMD descriptor registers to default values
-void xpcie_init_card() {
-  xpcie_initiator_reset();
 }
 
 // Performs any cleanup required before removing the device
 void xpcie_remove(struct pci_dev *dev) {
 
+    // Delete the interrupt timer
+    del_timer_sync(&irq_timer);
+    
     // Set the shutdown flags
     gReadAbort = gDie = 1;
     
@@ -363,22 +376,26 @@ void xpcie_remove(struct pci_dev *dev) {
     printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
 }
 
+//-----------------------------------------------------------------------------
+// Interrupt handling and DMA setup
+//
+
 irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 
     unsigned long flags;
-    u32 tlp_size, tlp_cnt;
     evtbuf *eb;
     
-    // WARNING: only MSI interrupts working currently    
     spin_lock_irqsave(&gEvtQ->lock, flags);
+
+    // Disable the lost interrupt timer
+    mod_timer(&irq_timer, jiffies-1);
     
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
     // Read out the actual transfer length and set in event
-    tlp_size = xpcie_read_reg(REG_WDMATLPS) & DMA_TLP_SIZE_MASK;
-    tlp_cnt = xpcie_read_reg(REG_WDMATLPC) & DMA_TLP_CNT_MASK;    
+    
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
-    eb->len = tlp_size*tlp_cnt*4;
+    eb->len = xpcie_get_transfer_size();
     
     // Data is now ready for processer. Increment the write pointer
     // and wake up and waiting reads
@@ -386,7 +403,7 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     gXferCount++;
     gEvtQ->dma_started = 0;
     
-    spin_unlock_irqrestore(&gEvtQ->lock, flags);    
+    spin_unlock_irqrestore(&gEvtQ->lock, flags);
     
     wake_up_interruptible(&gEvtQ->rd_waitq);
    
@@ -433,8 +450,7 @@ void dma_setup(struct work_struct *work) {
     }
 
     // FIX ME check the DONE status
-    printk(KERN_INFO"%s: DMA is%s done\n", gDrvrName,
-           (xpcie_read_reg(REG_DDMACR) & DDMACR_WR_DONE) ? "" : " NOT");
+    printk(KERN_INFO"%s: DMA is%s done\n", gDrvrName, xpcie_dma_wr_done() ? "" : " NOT");
 
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
     printk(KERN_INFO"%s: DMA setup address: %lx\n", gDrvrName, (unsigned long)eb->physaddr);
@@ -461,8 +477,63 @@ void dma_setup(struct work_struct *work) {
 
     // Record that we've started a DMA
     gEvtQ->dma_started = 1;
+
+    // Set up a timer in case we lose the interrupt
+    mod_timer(&irq_timer, jiffies+msecs_to_jiffies(IRQ_TIMEOUT_MS));
     
     spin_unlock(&gEvtQ->lock);    
+}
+
+// Timer is fired if we don't receive an interrupt for
+// a certain period of time
+void irq_timer_callback(unsigned long data) {
+
+    unsigned long flags;
+    
+    spin_lock_irqsave(&gEvtQ->lock, flags);
+    printk(KERN_WARNING"%s: no IRQ in %d ms!\n",gDrvrName, IRQ_TIMEOUT_MS);
+    
+    // Did we somehow forget to set up a transfer?  
+    if (!(gEvtQ->dma_started)) {
+        printk(KERN_WARNING"%s: irq timeout: setting up another transfer.\n",gDrvrName);
+        queue_work(dma_setup_wq, &dma_work);
+    }
+    else {
+        // If we started a transfer but just never got the interrupt,
+        // check to see if it's done
+        if (xpcie_dma_wr_done()) {
+            printk(KERN_WARNING"%s: irq timeout: DMA done; calling handler.\n",gDrvrName);
+            // Call the interrupt handler ourselves!
+            xpcie_irq_handler(gDev->irq, NULL, NULL);
+        }
+        else {
+            // DMA was started but is not done.  That is probably bad.
+            printk(KERN_WARNING"%s: irq timeout: DMA not done.\n",gDrvrName);        
+            xpcie_initiator_reset();
+            queue_work(dma_setup_wq, &dma_work);
+        }
+    }
+
+    spin_unlock_irqrestore(&gEvtQ->lock, flags);    
+
+    return;       
+}
+
+//-----------------------------------------------------------------------------
+// Device control functions
+
+//--- xpcie_initiator_reset(): Resets the Xilinx reference design
+void xpcie_initiator_reset() {
+  // Reset device and then make it active
+  xpcie_write_reg(REG_DCSR, DCSR_RESET);
+  mmiowb();
+  xpcie_write_reg(REG_DCSR, DCSR_ACTIVE);
+  mmiowb();
+}
+
+//--- xpcie_init_card(): Initializes XBMD descriptor registers to default values
+void xpcie_init_card() {
+  xpcie_initiator_reset();
 }
 
 void xpcie_dump_regs(void) {
@@ -484,6 +555,17 @@ void xpcie_write_reg(u32 dw_offset, u32 val) {
 	printk(KERN_INFO"%s Write Register %d Value %x\n", gDrvrName,
 	       dw_offset, val);  
     writel(val, (gBaseVirt + (4 * dw_offset)));
+}
+
+unsigned int xpcie_get_transfer_size(void) {
+    u32 tlp_size, tlp_cnt;
+    tlp_size = xpcie_read_reg(REG_WDMATLPS) & DMA_TLP_SIZE_MASK;
+    tlp_cnt = xpcie_read_reg(REG_WDMATLPC) & DMA_TLP_CNT_MASK;
+    return (tlp_size*tlp_cnt*4);
+}
+
+int xpcie_dma_wr_done(void) {
+    return (xpcie_read_reg(REG_DDMACR) & DDMACR_WR_DONE);
 }
 
 module_init(xpcie_init);
