@@ -32,6 +32,10 @@
 // Timer duration for lost interrupt (ms)
 #define IRQ_TIMEOUT_MS            1000
 
+// Xilinx XAPP1052 firmware test; driver sets up
+// transfer itself using a test pattern
+#define XILINX_TEST_MODE          1
+
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
 #define REG_DDMACR    1  // Device DMA Control Register

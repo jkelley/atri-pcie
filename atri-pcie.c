@@ -453,22 +453,24 @@ void dma_setup(struct work_struct *work) {
     printk(KERN_INFO"%s: DMA is%s done\n", gDrvrName, xpcie_dma_wr_done() ? "" : " NOT");
 
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
-    printk(KERN_INFO"%s: DMA setup address: %lx\n", gDrvrName, (unsigned long)eb->physaddr);
 
     // Reset the initiator.  This also clears the DONE bit.
+    // FIX ME: is this necessary?
     xpcie_initiator_reset();
     
     // Write the PCIe write DMA address to the device
     xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
 
-    // TEMP FIX ME: this is for the sample firmware only
-    // Write: Write DMA Expected Data Pattern with default value
-    xpcie_write_reg(REG_WDMATLPP, gXferCount);
-    // Write: Write DMA TLP Size register (4 dwords)
-    xpcie_write_reg(REG_WDMATLPS, 0x4);
-    // Write: Write DMA TLP Count register (randomize!)
-    get_random_bytes(&tlp_cnt, 4);
-    xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
+    // For testing with Xilinx XAPP1052 firmware
+    if (XILINX_TEST_MODE) {
+        // Write: Write DMA Expected Data Pattern with default value
+        xpcie_write_reg(REG_WDMATLPP, gXferCount);
+        // Write: Write DMA TLP Size register (4 dwords)
+        xpcie_write_reg(REG_WDMATLPS, 0x4);
+        // Write: Write DMA TLP Count register (randomize!)
+        get_random_bytes(&tlp_cnt, 4);
+        xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
+    }
     mmiowb();
     
     // Tell the device to start DMA
