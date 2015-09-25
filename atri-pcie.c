@@ -154,6 +154,11 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     
     eb = evtq_getevent(gEvtQ, gEvtQ->rd_idx);
 
+    // TEMP FIX ME DEBUG
+    printk(KERN_INFO"%s: buffer bytes: %02x %02x %02x %02x %02x %02x %02x %02x...\n", gDrvrName,
+           eb->buf[0], eb->buf[1], eb->buf[2], eb->buf[3],
+           eb->buf[4], eb->buf[5], eb->buf[6], eb->buf[7]);           
+    
     // Make sure buffer is large enough    
     if (eb->len > count) {
         up(&gSemRead);
@@ -388,7 +393,7 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     spin_lock_irqsave(&gEvtQ->lock, flags);
 
     // Disable the lost interrupt timer
-    mod_timer(&irq_timer, jiffies-1);
+    del_timer(&irq_timer);
     
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
@@ -481,7 +486,8 @@ void dma_setup(struct work_struct *work) {
     gEvtQ->dma_started = 1;
 
     // Set up a timer in case we lose the interrupt
-    mod_timer(&irq_timer, jiffies+msecs_to_jiffies(IRQ_TIMEOUT_MS));
+    irq_timer.expires = jiffies+msecs_to_jiffies(IRQ_TIMEOUT_MS);
+    add_timer(&irq_timer);
     
     spin_unlock(&gEvtQ->lock);    
 }

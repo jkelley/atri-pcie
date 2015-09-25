@@ -34,7 +34,7 @@
 
 // Xilinx XAPP1052 firmware test; driver sets up
 // transfer itself using a test pattern
-#define XILINX_TEST_MODE          1
+#define XILINX_TEST_MODE          0
 
 // Register definitions
 #define REG_DCSR      0  // Device Control Status Register
