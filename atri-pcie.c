@@ -454,14 +454,14 @@ void dma_setup(struct work_struct *work) {
         return;
     }
 
-    // FIX ME check the DONE status
+    // FIX ME DEBUG check the DONE status
     printk(KERN_INFO"%s: DMA is%s done\n", gDrvrName, xpcie_dma_wr_done() ? "" : " NOT");
 
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
 
     // Reset the initiator.  This also clears the DONE bit.
-    // This seems to be necessary
-    xpcie_initiator_reset();
+    if (XILINX_TEST_MODE)
+        xpcie_initiator_reset();
     
     // Write the PCIe write DMA address to the device
     xpcie_write_reg(REG_WDMATLPA, eb->physaddr);
@@ -554,8 +554,8 @@ void xpcie_dump_regs(void) {
 
 u32 xpcie_read_reg(u32 dw_offset) {
     u32 ret = 0;
-    printk(KERN_INFO"%s Read Register %d\n", gDrvrName, dw_offset);
     ret = readl(gBaseVirt + (4 * dw_offset));
+    printk(KERN_INFO"%s Read Register %d Value %x\n", gDrvrName, dw_offset, ret);    
     return ret; 
 }
 
