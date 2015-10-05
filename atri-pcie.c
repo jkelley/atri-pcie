@@ -125,11 +125,12 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
     evtbuf *eb;
     printk(KERN_INFO"%s: reading %d bytes\n", gDrvrName, (int)count);
-        
+
     if (down_interruptible(&gSemRead))
         return -ERESTARTSYS;
-
-    // Check if event queue is empty 
+    
+    // Check if event queue is empty
+    // FIX ME: this lock may not be necessary since the open() is locked
     while (evtq_isempty(gEvtQ) && !gReadAbort) {
         up(&gSemRead); 
 
@@ -171,9 +172,8 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     
     // Once event has been read, increment the read pointer.
     // Wake up any sleeping write preparation.
-    spin_lock(&gEvtQ->lock);    
+    // FIX ME: should this be atomic?
     gEvtQ->rd_idx++;
-    spin_unlock(&gEvtQ->lock);
     
     up(&gSemRead);
     wake_up_interruptible(&gEvtQ->wr_waitq);
@@ -424,12 +424,13 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
 void dma_setup(struct work_struct *work) {
     evtbuf *eb;
     u32 tlp_cnt;
+    unsigned long flags;
     
     printk(KERN_INFO"%s: DMA write setup\n", gDrvrName);
 
     // This part is locked against the top half of the interrupt
     // handler.  Otherwise we could send the wrong address.
-    spin_lock(&gEvtQ->lock);
+    spin_lock_irqsave(&gEvtQ->lock, flags);
 
     // Have we already done this, but not received an interrupt?
     if (gEvtQ->dma_started) {
@@ -438,14 +439,14 @@ void dma_setup(struct work_struct *work) {
         return;        
     }
     
-    // If the queue is full, wait until it is not    
-    while (evtq_isfull(gEvtQ) && !gDie) {
+    // If the queue is almost full, wait until it is not    
+    while (evtq_isalmostfull(gEvtQ) && !gDie) {
         // but don't hold the lock
         spin_unlock(&gEvtQ->lock);
-        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
+        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isalmostfull(gEvtQ)))
             continue;
         // Reaquire lock
-        spin_lock(&gEvtQ->lock);
+        spin_lock_irqsave(&gEvtQ->lock, flags);
     }
 
     // If we're about to shutdown, don't go any further
@@ -477,7 +478,7 @@ void dma_setup(struct work_struct *work) {
         xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
     }
     mmiowb();
-    
+
     // Tell the device to start DMA
     xpcie_write_reg(REG_DDMACR, DDMACR_WR_START);
     mmiowb();

@@ -13,6 +13,8 @@
 #define NEVT       (1 << NEVTQ_BITS)
 #define EVTQMASK   (NEVT-1)
 
+#define NEVT_ALMOST_FULL (NEVT-8)
+
 #define EVTBUFSIZE  512000
 
 typedef struct {
@@ -35,6 +37,7 @@ typedef struct {
 inline evtbuf *evtq_getevent(evtq *q, unsigned i) { return &(q->evt[i&EVTQMASK]); }
 inline int evtq_entries(evtq *q) { return q->wr_idx - q->rd_idx; }
 inline int evtq_isfull(evtq *q)  { return NEVT == evtq_entries(q); }
+inline int evtq_isalmostfull(evtq *q)  { return NEVT_ALMOST_FULL == evtq_entries(q); }
 inline int evtq_isempty(evtq *q) { return q->wr_idx == q->rd_idx; }
 inline void empty_evtq(evtq *q) { q->wr_idx = q->rd_idx = 0; }
     
