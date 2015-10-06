@@ -40,7 +40,7 @@ int              gXferCount = 1;             // Debug test pattern counter
 DEFINE_SEMAPHORE(gSemOpen);
 DEFINE_SEMAPHORE(gSemRead);
 
-// Dropped interrupt timer (seems to indeed happen!)
+// Dropped interrupt timer 
 static struct timer_list irq_timer;
 
 //  DMA ring buffer for event transfer
@@ -124,7 +124,10 @@ int xpcie_release(struct inode *inode, struct file *filp) {
 ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
     evtbuf *eb;
-    printk(KERN_INFO"%s: reading %d bytes\n", gDrvrName, (int)count);
+    size_t nbytes;
+    int next_event = 0;
+    
+    printk(KERN_INFO"%s: reading %d bytes (offset %d)\n", gDrvrName, (int)count, (int)*f_pos);
 
     if (down_interruptible(&gSemRead))
         return -ERESTARTSYS;
@@ -156,30 +159,42 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     eb = evtq_getevent(gEvtQ, gEvtQ->rd_idx);
 
     // TEMP FIX ME DEBUG
+    /*
     printk(KERN_INFO"%s: buffer bytes: %02x %02x %02x %02x %02x %02x %02x %02x...\n", gDrvrName,
            eb->buf[0], eb->buf[1], eb->buf[2], eb->buf[3],
            eb->buf[4], eb->buf[5], eb->buf[6], eb->buf[7]);           
-    
-    // Make sure buffer is large enough    
-    if (eb->len > count) {
-        up(&gSemRead);
-        return -ENOMEM; // Is this OK?
+    */
+
+    // See how many more bytes are available in this event    
+    if ((eb->len - *f_pos) <= count) {
+        nbytes = (eb->len - *f_pos);
+        next_event = 1;
     }
-    if (copy_to_user(buf, eb->buf, eb->len)) {
+    else
+        nbytes = count;
+    
+    if (copy_to_user(buf, &(eb->buf[*f_pos]), nbytes)) {
         up(&gSemRead);
         return -EFAULT;
     }
-    
-    // Once event has been read, increment the read pointer.
-    // Wake up any sleeping write preparation.
-    // FIX ME: should this be atomic?
-    gEvtQ->rd_idx++;
+
+    // Have we wrapped into a new event?
+    if (next_event) {        
+        // Once event has been read, increment the read pointer.
+        // Wake up any sleeping write preparation.
+        // FIX ME: should this be atomic?
+        gEvtQ->rd_idx++;
+        wake_up_interruptible(&gEvtQ->wr_waitq);
+        *f_pos = 0;
+    }
+    else {
+        *f_pos += nbytes;
+    }
     
     up(&gSemRead);
-    wake_up_interruptible(&gEvtQ->wr_waitq);
-    
-    printk(KERN_INFO"%s: xpcie_Read: %d bytes have been read...\n", gDrvrName, (int)eb->len);
-    return eb->len;
+
+    printk(KERN_INFO"%s: xpcie_read: %d bytes have been read...\n", gDrvrName, (int)nbytes);
+    return nbytes;
 }
 
 //-----------------------------------------------------------------------------
@@ -477,6 +492,11 @@ void dma_setup(struct work_struct *work) {
         get_random_bytes(&tlp_cnt, 4);
         xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
     }
+    else {
+        // FIX ME TEST
+        // Overloaded: number of bytes to send
+        xpcie_write_reg(REG_RDMATLPP, 512);
+    }    
     mmiowb();
 
     // Tell the device to start DMA
@@ -511,13 +531,14 @@ void irq_timer_callback(unsigned long data) {
         // If we started a transfer but just never got the interrupt,
         // check to see if it's done
         if (xpcie_dma_wr_done()) {
-            printk(KERN_WARNING"%s: irq timeout: DMA done; calling handler.\n",gDrvrName);
+            printk(KERN_WARNING"%s: irq timeout: DMA done; force call to handler.\n",gDrvrName);
             // Call the interrupt handler ourselves!
             xpcie_irq_handler(gDev->irq, NULL, NULL);
         }
         else {
             // DMA was started but is not done.  That is probably bad.
-            printk(KERN_WARNING"%s: irq timeout: DMA not done.\n",gDrvrName);        
+            printk(KERN_WARNING"%s: irq timeout: DMA started but not done; trying again.\n",gDrvrName);
+            gEvtQ->dma_started = 0;            
             xpcie_initiator_reset();
             queue_work(dma_setup_wq, &dma_work);
         }

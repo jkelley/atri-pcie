@@ -11,17 +11,25 @@
 #define MAXEVTSIZE 512000
 
 int main(int argc, char **argv) {
-    int f, i, j, cnt, nevts;
+    int f, i, j, cnt, nevts, nbytes;
     unsigned char *evtbuf;
 
-    if (argc != 2) {
-        printf("Usage: %s <# of events>\n", argv[0]);
+    if (argc < 2) {
+        printf("Usage: %s <# of events / chunks> [<chunk size>]\n", argv[0]);
         return 0;
     }
 
     nevts = atoi(argv[1]);
     printf("ATRI PCIe read tester: getting %d events\n", nevts);
-    
+
+    if (argc > 2) {
+        nbytes = atoi(argv[2]);
+        printf("Read chunk size: %d bytes\n", nbytes);
+    }
+    else {
+        nbytes = MAXEVTSIZE;
+    }
+        
     // Allocate memory for the event buffer
     evtbuf = (unsigned char *)malloc(MAXEVTSIZE);
     if (evtbuf == NULL) {
@@ -39,10 +47,10 @@ int main(int argc, char **argv) {
     // Loop and read as many events as requested
     // Print out the first few bytes of each
     for (i = 0; i < nevts; i++) {
-        cnt = read(f, evtbuf, MAXEVTSIZE);
+        cnt = read(f, evtbuf, nbytes);
         printf("Event %d: got %d bytes\n", i+1, cnt);
 
-        for (j = 0; j < 32; j++)
+        for (j = 0; j < 8; j++)
             printf("%02x ", evtbuf[j]);
         printf("\n");
 
