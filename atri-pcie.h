@@ -36,18 +36,22 @@
 // transfer itself using a test pattern
 #define XILINX_TEST_MODE          0
 
-// Register definitions
-#define REG_DCSR      0  // Device Control Status Register
-#define REG_DDMACR    1  // Device DMA Control Register
-#define REG_WDMATLPA  2  // Write DMA TLP Address Register
-#define REG_WDMATLPS  3  // Write DMA TLP Size Register
-#define REG_WDMATLPC  4  // Write DMA TLP Count Register
-#define REG_WDMATLPP  5  // Write DMA TLP Test Pattern Register
-#define REG_RDMATLPP  6  // Read DMA TLP Expected Pattern
-#define REG_RDMATLPA  7  // Read DMA TLP Address Register
-#define REG_RDMATLPS  8  // Read DMA TLP Size Register
-#define REG_RDMATLPC  9  // Read DMA TLP Count Register
-#define REG_RDMASTAT 12  // Read DMA Status Register
+// Register definitions (Xilinx)
+#define REG_DCSR       0  // Device Control Status Register
+#define REG_DDMACR     1  // Device DMA Control Register
+#define REG_WDMATLPA   2  // Write DMA TLP Address Register
+#define REG_WDMATLPS   3  // Write DMA TLP Size Register
+#define REG_WDMATLPC   4  // Write DMA TLP Count Register
+#define REG_WDMATLPP   5  // Write DMA TLP Test Pattern Register
+#define REG_RDMATLPP   6  // Read DMA TLP Expected Pattern
+#define REG_RDMATLPA   7  // Read DMA TLP Address Register
+#define REG_RDMATLPS   8  // Read DMA TLP Size Register
+#define REG_RDMATLPC   9  // Read DMA TLP Count Register
+#define REG_RDMASTAT  12  // Read DMA Status Register
+#define REG_DLTRSSTAT 16  // Device Link Transaction Size Status Register
+
+// Registers redefined for ATRI firmware
+#define REG_WDMATLPEX 5  // Write DMA TLP extra dword count (last TLP)
 
 // Register bits
 #define DCSR_RESET        1

@@ -454,11 +454,11 @@ void dma_setup(struct work_struct *work) {
         return;        
     }
     
-    // If the queue is almost full, wait until it is not    
-    while (evtq_isalmostfull(gEvtQ) && !gDie) {
+    // If the queue is full, wait until it is not    
+    while (evtq_isfull(gEvtQ) && !gDie) {
         // but don't hold the lock
         spin_unlock(&gEvtQ->lock);
-        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isalmostfull(gEvtQ)))
+        if (wait_event_interruptible(gEvtQ->wr_waitq, !evtq_isfull(gEvtQ)))
             continue;
         // Reaquire lock
         spin_lock_irqsave(&gEvtQ->lock, flags);
@@ -588,10 +588,20 @@ void xpcie_write_reg(u32 dw_offset, u32 val) {
 }
 
 unsigned int xpcie_get_transfer_size(void) {
-    u32 tlp_size, tlp_cnt;
+    u32 tlp_size, tlp_cnt, tlp_extra;
+    u32 bytes;
     tlp_size = xpcie_read_reg(REG_WDMATLPS) & DMA_TLP_SIZE_MASK;
     tlp_cnt = xpcie_read_reg(REG_WDMATLPC) & DMA_TLP_CNT_MASK;
-    return (tlp_size*tlp_cnt*4);
+    if (XILINX_TEST_MODE) {
+        bytes = (tlp_size*tlp_cnt*4);
+    }
+    else {
+        tlp_extra = xpcie_read_reg(REG_WDMATLPEX);
+        // TEMP FIX ME
+        // bytes = (tlp_size*(tlp_cnt-1) + tlp_extra)*4;
+        bytes = (tlp_size*tlp_cnt*4);        
+    }
+    return bytes;
 }
 
 int xpcie_dma_wr_done(void) {
@@ -602,4 +612,3 @@ module_init(xpcie_init);
 module_exit(xpcie_exit);
 
 MODULE_LICENSE("Dual BSD/GPL");
-
