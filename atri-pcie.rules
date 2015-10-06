@@ -1,0 +1,1 @@
+KERNEL=="atri-pcie", MODE="0444"

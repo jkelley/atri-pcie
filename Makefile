@@ -21,6 +21,7 @@ install: module
 	cp $(dev_name).ko /lib/modules/$(linux_rev)/
 	depmod -a
 	if [ $(etc_modules_check) -eq 0 ]; then echo $(dev_name) >> /etc/modules; fi
+	cp $(dev_name).rules /etc/udev/rules.d/10_$(dev_name).rules
 
 device:
 	rm -rf /dev/$(dev_name)

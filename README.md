@@ -31,7 +31,7 @@ $ sudo make device
 
 or simply `sudo make all`.
 
-Install
+Installing by hand
 ---
 
 After a reboot the device files have to recreated with `sudo make device`.
@@ -47,7 +47,11 @@ Finally, the driver can be loaded with `sudo insmod atri-pcie.ko`.
 Messages in `/var/log/kern.log` or `/var/log/messages` will indicate if
 this is successful.
 
-FIX ME: this will eventually go into an init.d script.
+Installing persistently
+---
+
+To install the driver and udev rules so that the module is loaded and the
+device files are created at boot time, use `sudo make install`.
 
 Testing
 ---
