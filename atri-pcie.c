@@ -611,4 +611,8 @@ int xpcie_dma_wr_done(void) {
 module_init(xpcie_init);
 module_exit(xpcie_exit);
 
+// Alias for udev
+
+MODULE_AUTHOR("John Kelley");
 MODULE_LICENSE("Dual BSD/GPL");
+
