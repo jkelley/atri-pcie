@@ -75,4 +75,12 @@ example, to read out 10 8-byte chunks instead of 10 full events, use
 $ ./readtest 10 8
 </code></pre>
 
+TODO
+---
+
+- Change most INFO printk's to DEBUG
+- Some #defines should be parameters
+- Makefile install blows away existing rc.local
+- Get udev device file creation working
+- Improve queue throttling (use almost full indicator)
 
