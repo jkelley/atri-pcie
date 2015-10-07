@@ -50,8 +50,8 @@ this is successful.
 Installing persistently
 ---
 
-To install the driver and udev rules so that the module is loaded and the
-device files are created at boot time, use `sudo make install`.
+To install so that the module is loaded and the device files are created at
+boot time, use `sudo make install`.  
 
 Testing
 ---
