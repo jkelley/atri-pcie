@@ -78,6 +78,7 @@ $ ./readtest 10 8
 TODO
 ---
 
+- Change to use real firmware transfer size calculation
 - Change most INFO printk's to DEBUG
 - Some #defines should be parameters
 - Makefile install blows away existing rc.local
