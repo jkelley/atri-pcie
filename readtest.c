@@ -10,6 +10,12 @@
 #define DEVNAME "/dev/atri-pcie"
 #define MAXEVTSIZE 512000
 
+/* Ioctl commands */
+enum {
+    XPCIE_IOCTL_INIT,
+    XPCIE_IOCTL_FLUSH
+};
+
 int main(int argc, char **argv) {
     int f, i, j, cnt, nevts, nbytes;
     unsigned char *evtbuf;
@@ -38,12 +44,15 @@ int main(int argc, char **argv) {
     }
 
     // Open the device file
-    f = open(DEVNAME, O_RDONLY);
+    f = open(DEVNAME, O_RDONLY);    
     if (f < 0) {
-        printf("ERROR: couldn't open device %s\n", DEVNAME);
+        printf("Error: couldn't open device %s\n", DEVNAME);
         return -1;
     }
 
+    // Flush the queue of stale events
+    ioctl(f, XPCIE_IOCTL_FLUSH);
+    
     // Loop and read as many events as requested
     // Print out the first few bytes of each
     for (i = 0; i < nevts; i++) {
@@ -56,6 +65,7 @@ int main(int argc, char **argv) {
 
     }
     
-    close(f);        
+    close(f);
+    
     return 0;
 }

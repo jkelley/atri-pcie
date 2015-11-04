@@ -60,6 +60,7 @@ void xpcie_initiator_reset(void);
 unsigned int xpcie_get_transfer_size(void);
 int xpcie_dma_wr_done(void);
 void xpcie_remove(struct pci_dev *dev);
+void xpcie_queue_flush(void);
 int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id);
 void dma_setup(struct work_struct *work);
 
@@ -96,8 +97,8 @@ int xpcie_open(struct inode *inode, struct file *filp) {
     if (down_trylock(&gSemOpen))
         return -EINVAL;
 
-    // Reset any previous abort   
-    gReadAbort = 0;
+    // Reset any previous abort flags
+    gReadAbort = gDie = 0;
     
     // Set up the first DMA transfer
     queue_work(dma_setup_wq, &dma_work);
@@ -197,6 +198,31 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     return nbytes;
 }
 
+//
+// xpcie_ioctl: (limited) driver control via IOCTL operations
+//
+long xpcie_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
+  
+  long ret = SUCCESS;
+  
+  switch (cmd) {
+      
+  case XPCIE_IOCTL_INIT:          // Initialize the firmware
+      printk(KERN_INFO"%s: ioctl INIT\n", gDrvrName);
+      xpcie_init_card();
+      break;
+  case XPCIE_IOCTL_FLUSH:         // Flush the event queue
+      // FIX ME: this could hose stuff if called at the wrong time?
+      printk(KERN_INFO"%s: ioctl FLUSH\n", gDrvrName);      
+      xpcie_queue_flush();
+      break;
+  default:
+      break;
+  }
+  
+  return ret;
+}
+
 //-----------------------------------------------------------------------------
 // Module file operations and init/exit.  Real initialization and exit
 // done by probe/remove; this just registers the driver structure.
@@ -204,6 +230,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
 struct file_operations xpcie_intf = {
     read:           xpcie_read,
+    unlocked_ioctl: xpcie_ioctl,    
     open:           xpcie_open,
     release:        xpcie_release,
 };
@@ -342,16 +369,14 @@ void xpcie_remove(struct pci_dev *dev) {
 
     // Delete the interrupt timer
     del_timer_sync(&irq_timer);
-    
-    // Set the shutdown flags
+
+    // Set the abort flags
     gReadAbort = gDie = 1;
-    
+
     // Wake up any sleeping DMA setup and reads and don't restart
     if (gEvtQ != NULL) {
         printk(KERN_INFO"%s: empty event queue\n", gDrvrName);
-        wake_up_interruptible(&gEvtQ->wr_waitq);
-        wake_up_interruptible(&gEvtQ->rd_waitq);
-        empty_evtq(gEvtQ);
+        xpcie_queue_flush();
     }
         
     // Flush the DMA workqueue and destroy it
@@ -412,24 +437,26 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     
     printk(KERN_INFO"%s: Interrupt Handler Start ..",gDrvrName);
 
-    // Read out the actual transfer length and set in event
+    if (!gDie) {
+        // Read out the actual transfer length and set in event    
+        eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
+        eb->len = xpcie_get_transfer_size();
     
-    eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);
-    eb->len = xpcie_get_transfer_size();
-    
-    // Data is now ready for processer. Increment the write pointer
-    // and wake up and waiting reads
-    gEvtQ->wr_idx++;
-    gXferCount++;
-    gEvtQ->dma_started = 0;
-    
+        // Data is now ready for processer. Increment the write pointer
+        // and wake up and waiting reads
+        gEvtQ->wr_idx++;
+        gXferCount++;
+    }    
+    gEvtQ->dma_started = 0;    
     spin_unlock_irqrestore(&gEvtQ->lock, flags);
     
     wake_up_interruptible(&gEvtQ->rd_waitq);
    
     // Put the setup for the next write into a workqueue.
     // It can sleep so cannot be done here
-    queue_work(dma_setup_wq, &dma_work);
+    if (!gDie)
+        queue_work(dma_setup_wq, &dma_work);
+    
     printk(KERN_INFO"%s evt_queue: %d events\n", gDrvrName, evtq_entries(gEvtQ));
     printk(KERN_INFO"%s Interrupt Handler End ..\n", gDrvrName);
 
@@ -494,8 +521,8 @@ void dma_setup(struct work_struct *work) {
     }
     else {
         // FIX ME TEST
-        // Overloaded: number of bytes to send
-        xpcie_write_reg(REG_RDMATLPP, 512);
+        // Overloaded: clock cycles per simulated event
+        xpcie_write_reg(REG_RDMATLPP, 10000000);
     }    
     mmiowb();
 
@@ -547,6 +574,23 @@ void irq_timer_callback(unsigned long data) {
     spin_unlock_irqrestore(&gEvtQ->lock, flags);    
 
     return;       
+}
+
+// Queue flush
+void xpcie_queue_flush(void) {
+
+    unsigned long flags;
+    
+    // Lock the event queue and empty it
+    spin_lock_irqsave(&gEvtQ->lock, flags);
+    empty_evtq(gEvtQ);
+    spin_unlock_irqrestore(&gEvtQ->lock, flags);
+
+    // Wake up stuff that was waiting
+    wake_up_interruptible(&gEvtQ->wr_waitq);
+    wake_up_interruptible(&gEvtQ->rd_waitq);
+    
+    return;
 }
 
 //-----------------------------------------------------------------------------

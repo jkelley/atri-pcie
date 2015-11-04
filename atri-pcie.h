@@ -72,3 +72,9 @@
 #define HAVE_KREG   0x04                    // Kernel registration
 #define HAVE_WQ     0x08                    // DMA work queue
 
+// Ioctl commands
+enum {
+    XPCIE_IOCTL_INIT,
+    XPCIE_IOCTL_FLUSH,
+    XPCIE_IOCTL_NUMCOMMANDS
+};
