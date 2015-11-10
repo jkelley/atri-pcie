@@ -103,7 +103,7 @@ int xpcie_open(struct inode *inode, struct file *filp) {
     // Set up the first DMA transfer
     queue_work(dma_setup_wq, &dma_work);
 
-    printk(KERN_DEBUG"%s: Open: module opened\n",gDrvrName);    
+    PDEBUG("%s: Open: module opened\n",gDrvrName);    
     return SUCCESS;
 }
 
@@ -115,7 +115,7 @@ int xpcie_release(struct inode *inode, struct file *filp) {
 
     // Release the single-reader lock
     up(&gSemOpen);
-    printk(KERN_DEBUG"%s: Release: device released\n",gDrvrName);    
+    PDEBUG("%s: Release: device released\n",gDrvrName);    
     return SUCCESS;
 }
 
@@ -128,7 +128,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     size_t nbytes;
     int next_event = 0;
     
-    printk(KERN_DEBUG"%s: reading %d bytes (offset %d)\n", gDrvrName, (int)count, (int)*f_pos);
+    PDEBUG("%s: reading %d bytes (offset %d)\n", gDrvrName, (int)count, (int)*f_pos);
 
     if (down_interruptible(&gSemRead))
         return -ERESTARTSYS;
@@ -161,7 +161,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
 
     // TEMP FIX ME DEBUG
     /*
-    printk(KERN_DEBUG"%s: buffer bytes: %02x %02x %02x %02x %02x %02x %02x %02x...\n", gDrvrName,
+    PDEBUG("%s: buffer bytes: %02x %02x %02x %02x %02x %02x %02x %02x...\n", gDrvrName,
            eb->buf[0], eb->buf[1], eb->buf[2], eb->buf[3],
            eb->buf[4], eb->buf[5], eb->buf[6], eb->buf[7]);           
     */
@@ -194,7 +194,7 @@ ssize_t xpcie_read(struct file *filp, char *buf, size_t count, loff_t *f_pos) {
     
     up(&gSemRead);
 
-    printk(KERN_DEBUG"%s: xpcie_read: %d bytes have been read...\n", gDrvrName, (int)nbytes);
+    PDEBUG("%s: xpcie_read: %d bytes have been read...\n", gDrvrName, (int)nbytes);
     return nbytes;
 }
 
@@ -208,12 +208,12 @@ long xpcie_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
   switch (cmd) {
       
   case XPCIE_IOCTL_INIT:          // Initialize the firmware
-      printk(KERN_INFO"%s: ioctl INIT\n", gDrvrName);
+      printk(KERN_INFO "%s: ioctl INIT\n", gDrvrName);
       xpcie_init_card();
       break;
   case XPCIE_IOCTL_FLUSH:         // Flush the event queue
       // FIX ME: this could hose stuff if called at the wrong time?
-      printk(KERN_INFO"%s: ioctl FLUSH\n", gDrvrName);      
+      printk(KERN_INFO "%s: ioctl FLUSH\n", gDrvrName);      
       xpcie_queue_flush();
       break;
   default:
@@ -256,7 +256,7 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
 
     // Enable device
     if (0 > pci_enable_device(gDev)) {
-        printk(KERN_WARNING"%s: probe: Device not enabled.\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: Device not enabled.\n", gDrvrName);
         return (CRIT_ERR);
     }
     
@@ -265,27 +265,27 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     gBaseHdwr = pci_resource_start(gDev, 0);
     
     if (0 > gBaseHdwr) {
-        printk(KERN_WARNING"%s: probe: Base Address not set.\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: Base Address not set.\n", gDrvrName);
         return (CRIT_ERR);
     } 
-    printk(KERN_DEBUG"%s: probe: Base hw val %lx\n", gDrvrName, (unsigned long)gBaseHdwr);
+    PDEBUG("%s: probe: Base hw val %lx\n", gDrvrName, (unsigned long)gBaseHdwr);
     
     // Get the Base Address Length
     gBaseLen = pci_resource_len(gDev, 0);
-    printk(KERN_DEBUG"%s: probe: Base hw len %d\n", gDrvrName, (unsigned int)gBaseLen);
+    PDEBUG("%s: probe: Base hw len %d\n", gDrvrName, (unsigned int)gBaseLen);
     
     // Remap the I/O register block so that it can be safely accessed.
     // I/O register block starts at gBaseHdwr and is 32 bytes long.
     gBaseVirt = ioremap(gBaseHdwr, gBaseLen);
     if (!gBaseVirt) {
-        printk(KERN_WARNING"%s: probe: Could not remap memory.\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: Could not remap memory.\n", gDrvrName);
         return (CRIT_ERR);
     } 
-    printk(KERN_DEBUG"%s: probe: Virt HW address %lX\n", gDrvrName, (unsigned long)gBaseVirt);
+    PDEBUG("%s: probe: Virt HW address %lX\n", gDrvrName, (unsigned long)gBaseVirt);
         
     // Check the memory region to see if it is in use
     if (0 > check_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE)) {
-        printk(KERN_WARNING"%s: probe: Memory in use.\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: Memory in use.\n", gDrvrName);
         return (CRIT_ERR);
     }
     
@@ -294,25 +294,25 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     // Update flags
     gStatFlags = gStatFlags | HAVE_REGION;
     
-    printk(KERN_DEBUG"%s: probe: Initialize Hardware Done..\n",gDrvrName);
+    PDEBUG("%s: probe: Initialize Hardware Done..\n",gDrvrName);
     
-    printk(KERN_DEBUG"%s: IRQ Setup..\n", gDrvrName);
+    PDEBUG("%s: IRQ Setup..\n", gDrvrName);
     // Request IRQ from OS
     // Try to get an MSI interrupt
     if (PCI_USE_MSI) {
         if (pci_enable_msi(gDev) < 0) {
-            printk(KERN_WARNING"%s: probe: Unable to enable MSI",gDrvrName);    
+            printk(KERN_WARNING "%s: probe: Unable to enable MSI",gDrvrName);    
             return (CRIT_ERR);
         }        
-        printk(KERN_DEBUG"%s: MSI interrupt; device IRQ is %d\n", gDrvrName, gDev->irq);
+        PDEBUG("%s: MSI interrupt; device IRQ is %d\n", gDrvrName, gDev->irq);
     }
     else {
         irqFlags |= IRQF_SHARED;
-        printk(KERN_DEBUG"%s: shared interrupt; device IRQ is %d\n", gDrvrName, gDev->irq);        
+        PDEBUG("%s: shared interrupt; device IRQ is %d\n", gDrvrName, gDev->irq);        
     }
     
     if (0 > request_irq(gDev->irq, (irq_handler_t) xpcie_irq_handler, irqFlags, gDrvrName, gDev)) {
-        printk(KERN_WARNING"%s: probe: Unable to allocate IRQ",gDrvrName);
+        printk(KERN_WARNING "%s: probe: Unable to allocate IRQ",gDrvrName);
         return (CRIT_ERR);
     }
     // Update flags stating IRQ was successfully obtained
@@ -320,7 +320,7 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
         
     // Set address range for DMA transfers
     if (pci_set_dma_mask(gDev, PCI_HW_DMA_MASK) < 0) {
-        printk(KERN_WARNING"%s: probe: DMA mask could not be set.\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: DMA mask could not be set.\n", gDrvrName);
         return (CRIT_ERR);
     }
     
@@ -330,10 +330,10 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     
     // Register with the kernel as a character device.
     if (0 > register_chrdev(gDrvrMajor, gDrvrName, &xpcie_intf)) {
-        printk(KERN_WARNING"%s: probe: will not register\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: will not register\n", gDrvrName);
         return (CRIT_ERR);
     }
-    printk(KERN_DEBUG"%s: probe: module registered\n", gDrvrName);
+    PDEBUG("%s: probe: module registered\n", gDrvrName);
     gStatFlags = gStatFlags | HAVE_KREG;
     
     //--- END: Register Driver
@@ -341,7 +341,7 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     // Create DMA workqueue
     dma_setup_wq = create_singlethread_workqueue("atri-pcie-dma-work");
     if (dma_setup_wq == NULL) {
-        printk(KERN_WARNING"%s: probe: couldn't create DMA workqueue\n", gDrvrName);
+        printk(KERN_WARNING "%s: probe: couldn't create DMA workqueue\n", gDrvrName);
         return (CRIT_ERR);
     }
     gStatFlags = gStatFlags | HAVE_WQ;
@@ -349,7 +349,7 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     // Create event queue
     gEvtQ = new_evtq(gDev);
     if (gEvtQ == NULL) {
-        printk(KERN_ALERT"%s: Open: couldn't create event queue\n",gDrvrName);
+        printk(KERN_ALERT "%s: Open: couldn't create event queue\n",gDrvrName);
         return (CRIT_ERR);
     }
     
@@ -359,7 +359,7 @@ int xpcie_probe(struct pci_dev *dev, const struct pci_device_id *id) {
     // Set up (but don't arm) interrupt timer
     setup_timer(&irq_timer, irq_timer_callback, 0);
 
-    printk(KERN_ALERT"%s: driver is loaded\n", gDrvrName);
+    printk(KERN_ALERT "%s: driver is loaded\n", gDrvrName);
         
     return 0;
 }
@@ -375,26 +375,26 @@ void xpcie_remove(struct pci_dev *dev) {
 
     // Wake up any sleeping DMA setup and reads and don't restart
     if (gEvtQ != NULL) {
-        printk(KERN_DEBUG"%s: empty event queue\n", gDrvrName);
+        PDEBUG("%s: empty event queue\n", gDrvrName);
         xpcie_queue_flush();
     }
         
     // Flush the DMA workqueue and destroy it
     if (gStatFlags & HAVE_WQ) {
-        printk(KERN_DEBUG"%s: destroy workqueue\n", gDrvrName);        
+        PDEBUG("%s: destroy workqueue\n", gDrvrName);        
         flush_workqueue(dma_setup_wq);
         destroy_workqueue(dma_setup_wq);
     }
     
     // Check if we have a memory region and free it
     if (gStatFlags & HAVE_REGION) {
-        printk(KERN_DEBUG"%s: release memory\n",gDrvrName);        
+        PDEBUG("%s: release memory\n",gDrvrName);        
         release_mem_region(gBaseHdwr, PCIE_REGISTER_SIZE);
     }
     
     // Check if we have an IRQ and free it
     if (gStatFlags & HAVE_IRQ) {
-        printk(KERN_DEBUG"%s: free IRQ %d\n",gDrvrName, gDev->irq);    
+        PDEBUG("%s: free IRQ %d\n",gDrvrName, gDev->irq);    
         free_irq(gDev->irq, gDev);
         if (PCI_USE_MSI)
             pci_disable_msi(gDev);    
@@ -402,23 +402,23 @@ void xpcie_remove(struct pci_dev *dev) {
     
     // Free up memory pointed to by virtual address
     if (gBaseVirt != NULL) {
-        printk(KERN_DEBUG"%s: unmap memory\n",gDrvrName);          
+        PDEBUG("%s: unmap memory\n",gDrvrName);          
         iounmap(gBaseVirt);
         gBaseVirt = NULL;
     }
     
     // Unregister Device Driver
     if (gStatFlags & HAVE_KREG) {
-        printk(KERN_DEBUG"%s: unregister driver\n",gDrvrName);        
+        PDEBUG("%s: unregister driver\n",gDrvrName);        
         unregister_chrdev(gDrvrMajor, gDrvrName);
     }  
     gStatFlags = 0;
 
     // Release event queue memory
-    printk(KERN_DEBUG"%s: delete event queue structure\n",gDrvrName);
+    PDEBUG("%s: delete event queue structure\n",gDrvrName);
     delete_evtq(gEvtQ);
     
-    printk(KERN_ALERT"%s driver is unloaded\n", gDrvrName);
+    printk(KERN_ALERT "%s driver is unloaded\n", gDrvrName);
 }
 
 //-----------------------------------------------------------------------------
@@ -435,7 +435,7 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     // Disable the lost interrupt timer
     del_timer(&irq_timer);
     
-    printk(KERN_DEBUG"%s: Interrupt Handler Start ..",gDrvrName);
+    PDEBUG("%s: Interrupt Handler Start ..",gDrvrName);
 
     if (!gDie) {
         // Read out the actual transfer length and set in event    
@@ -457,8 +457,8 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     if (!gDie)
         queue_work(dma_setup_wq, &dma_work);
     
-    printk(KERN_DEBUG"%s evt_queue: %d events\n", gDrvrName, evtq_entries(gEvtQ));
-    printk(KERN_DEBUG"%s Interrupt Handler End ..\n", gDrvrName);
+    PDEBUG("%s evt_queue: %d events\n", gDrvrName, evtq_entries(gEvtQ));
+    PDEBUG("%s Interrupt Handler End ..\n", gDrvrName);
 
     return (irq_handler_t) IRQ_HANDLED;
 }
@@ -468,7 +468,7 @@ void dma_setup(struct work_struct *work) {
     u32 tlp_cnt;
     unsigned long flags;
     
-    printk(KERN_DEBUG"%s: DMA write setup\n", gDrvrName);
+    PDEBUG("%s: DMA write setup\n", gDrvrName);
 
     // This part is locked against the top half of the interrupt
     // handler.  Otherwise we could send the wrong address.
@@ -476,7 +476,7 @@ void dma_setup(struct work_struct *work) {
 
     // Have we already done this, but not received an interrupt?
     if (gEvtQ->dma_started) {
-        printk(KERN_WARNING"%s: dma_setup: DMA is already in progress, not starting another!\n",gDrvrName);
+        printk(KERN_WARNING "%s: dma_setup: DMA is already in progress, not starting another!\n",gDrvrName);
         spin_unlock(&gEvtQ->lock);
         return;        
     }
@@ -497,8 +497,8 @@ void dma_setup(struct work_struct *work) {
         return;
     }
 
-    // FIX ME DEBUG check the DONE status
-    printk(KERN_DEBUG"%s: DMA is%s done\n", gDrvrName, xpcie_dma_wr_done() ? "" : " NOT");
+    PDEBUG("%s: DMA is%s done\n", gDrvrName,
+                       xpcie_dma_wr_done() ? "" : " NOT");
 
     eb = evtq_getevent(gEvtQ, gEvtQ->wr_idx);        
 
@@ -547,24 +547,24 @@ void irq_timer_callback(unsigned long data) {
     unsigned long flags;
     
     spin_lock_irqsave(&gEvtQ->lock, flags);
-    printk(KERN_WARNING"%s: no IRQ in %d ms!\n",gDrvrName, IRQ_TIMEOUT_MS);
+    printk(KERN_WARNING "%s: no IRQ in %d ms!\n",gDrvrName, IRQ_TIMEOUT_MS);
     
     // Did we somehow forget to set up a transfer?  
     if (!(gEvtQ->dma_started)) {
-        printk(KERN_WARNING"%s: irq timeout: setting up another transfer.\n",gDrvrName);
+        printk(KERN_WARNING "%s: irq timeout: setting up another transfer.\n",gDrvrName);
         queue_work(dma_setup_wq, &dma_work);
     }
     else {
         // If we started a transfer but just never got the interrupt,
         // check to see if it's done
         if (xpcie_dma_wr_done()) {
-            printk(KERN_WARNING"%s: irq timeout: DMA done; force call to handler.\n",gDrvrName);
+            printk(KERN_WARNING "%s: irq timeout: DMA done; force call to handler.\n",gDrvrName);
             // Call the interrupt handler ourselves!
             xpcie_irq_handler(gDev->irq, NULL, NULL);
         }
         else {
             // DMA was started but is not done.  That is probably bad.
-            printk(KERN_WARNING"%s: irq timeout: DMA started but not done; trying again.\n",gDrvrName);
+            printk(KERN_WARNING "%s: irq timeout: DMA started but not done; trying again.\n",gDrvrName);
             gEvtQ->dma_started = 0;            
             xpcie_initiator_reset();
             queue_work(dma_setup_wq, &dma_work);
@@ -614,20 +614,20 @@ void xpcie_dump_regs(void) {
     u32 i, regx;
     for (i = 0; i < 13; i++) {
         regx = xpcie_read_reg(i);
-        printk(KERN_WARNING"%s : REG<%d> : 0x%X\n", gDrvrName, i, regx);
+        printk(KERN_WARNING "%s : REG<%d> : 0x%X\n", gDrvrName, i, regx);
     }    
 }
 
 u32 xpcie_read_reg(u32 dw_offset) {
     u32 ret = 0;
     ret = readl(gBaseVirt + (4 * dw_offset));
-    printk(KERN_DEBUG"%s Read Register %d Value %x\n", gDrvrName, dw_offset, ret);    
+    PDEBUG("%s Read Register %d Value %x\n", gDrvrName, dw_offset, ret);    
     return ret; 
 }
 
 void xpcie_write_reg(u32 dw_offset, u32 val) {
-	printk(KERN_DEBUG"%s Write Register %d Value %x\n", gDrvrName,
-	       dw_offset, val);  
+	PDEBUG("%s Write Register %d Value %x\n", gDrvrName,
+                       dw_offset, val);  
     writel(val, (gBaseVirt + (4 * dw_offset)));
 }
 
@@ -642,7 +642,7 @@ unsigned int xpcie_get_transfer_size(void) {
     else {
         tlp_extra = xpcie_read_reg(REG_WDMATLPEX);
         bytes = (tlp_size*(tlp_cnt-1) + tlp_extra)*4;
-        printk(KERN_DEBUG"%s transfer size %u B (size %u cnt %u extra %u)\n",
+        PDEBUG("%s transfer size %u B (size %u cnt %u extra %u)\n",
                gDrvrName, bytes, tlp_size, tlp_cnt, tlp_extra);        
     }
     return bytes;

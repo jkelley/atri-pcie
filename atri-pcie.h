@@ -78,3 +78,11 @@ enum {
     XPCIE_IOCTL_FLUSH,
     XPCIE_IOCTL_NUMCOMMANDS
 };
+
+// Debug printk can be disabled
+#undef PDEBUG
+#ifdef ATRI_DEBUG
+#define PDEBUG(fmt, args...) printk(KERN_DEBUG fmt, ## args)
+#else
+#define PDEBUG(fmt, args...) /* it's off jim */
+#endif

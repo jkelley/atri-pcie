@@ -68,13 +68,11 @@ evtq *new_evtq(struct pci_dev *dev) {
     evtq *q;
     
     // Allocate the queue itself
-    printk(KERN_DEBUG"new_evtq: allocating queue %d bytes\n", (int)sizeof(evtq));
     q = (evtq *) kmalloc(sizeof(evtq), GFP_KERNEL);
     if (q == NULL)
         return NULL;
 
     // Allocate all of the events (DMA buffers)
-    printk(KERN_DEBUG"new_evtq: allocating events\n");    
     for (i = 0; i < NEVT; i++) {
         evtbuf *eb = evtq_getevent(q, i);
         eb->buf = pci_alloc_consistent(dev, EVTBUFSIZE, &eb->physaddr);
@@ -82,7 +80,7 @@ evtq *new_evtq(struct pci_dev *dev) {
         eb->len = 0;
     }
     if (failed) {
-        printk(KERN_WARNING"new_evtq: allocations failed!\n");             
+        printk(KERN_WARNING "new_evtq: allocations failed!\n");             
         delete_evtq(q);
         return NULL;
     }

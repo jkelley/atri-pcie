@@ -2,6 +2,18 @@
 # Makefile for ATRI PCIe driver
 # John Kelley, jkelley@icecube.wisc.edu
 #
+
+# Set to y to enable debug printks
+DEBUG = n
+
+# Add to CFLAGS
+ifeq ($(DEBUG),y)
+  DEBFLAGS = -O -g -DATRI_DEBUG # "-O" is needed to expand inlines
+else
+  DEBFLAGS = -O2
+endif
+ccflags-y := $(DEBFLAGS)
+
 obj-m := atri-pcie.o
 
 dev_name += atri-pcie
