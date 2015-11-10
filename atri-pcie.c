@@ -641,9 +641,9 @@ unsigned int xpcie_get_transfer_size(void) {
     }
     else {
         tlp_extra = xpcie_read_reg(REG_WDMATLPEX);
-        // TEMP FIX ME
-        // bytes = (tlp_size*(tlp_cnt-1) + tlp_extra)*4;
-        bytes = (tlp_size*tlp_cnt*4);        
+        bytes = (tlp_size*(tlp_cnt-1) + tlp_extra)*4;
+        printk(KERN_DEBUG"%s transfer size %u B (size %u cnt %u extra %u)\n",
+               gDrvrName, bytes, tlp_size, tlp_cnt, tlp_extra);        
     }
     return bytes;
 }
