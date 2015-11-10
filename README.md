@@ -77,9 +77,8 @@ $ ./readtest 10 8
 
 TODO
 ---
-- Change to use real firmware transfer size calculation
+- printk still too verbose
 - Some #defines should be parameters
-- Makefile install blows away existing rc.local
 - Get udev device file creation working
 - Improve queue throttling (use almost full indicator)
 

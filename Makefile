@@ -8,7 +8,7 @@ dev_name += atri-pcie
 module_home := $(shell pwd)
 linux_rev := $(shell uname -r)
 etc_modules_check := $(shell grep -c $(dev_name) /etc/modules)
-rclocal_check := $(shell grep -c atri /etc/rc.local)
+rclocal_done_check := $(shell grep -c atri /etc/rc.local)
 
 all: module test device
 
@@ -22,9 +22,17 @@ install: module
 	cp $(dev_name).ko /lib/modules/$(linux_rev)/
 	depmod -a
 	if [ $(etc_modules_check) -eq 0 ]; then echo $(dev_name) >> /etc/modules; fi
-	#This is broken
-	#cp $(dev_name).rules /etc/udev/rules.d/10_$(dev_name).rules
-	if [ $(rclocal_check) -eq 0 ]; then cp mkatridev.sh /etc/rc.local; fi
+	if [ $(rclocal_done_check) -eq 0 ]; \
+	then if [ -f /etc/rc.local ]; then \
+		echo "Modifying rc.local"; \
+		head -n -1 /etc/rc.local > /tmp/rc.local.new; \
+		tail -n +2 mkatridev.sh >> /tmp/rc.local.new; \
+		tail -n 1 /etc/rc.local >> /tmp/rc.local.new; \
+		mv /tmp/rc.local.new /etc/rc.local; \
+	else \
+		cp mkatridev.sh /etc/rc.local; \
+		fi; \
+	fi
 
 device:
 	rm -rf /dev/$(dev_name)
