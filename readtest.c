@@ -59,9 +59,15 @@ int main(int argc, char **argv) {
         cnt = read(f, evtbuf, nbytes);
         printf("Event %d: got %d bytes\n", i+1, cnt);
 
-        for (j = 0; j < 8; j++)
+        for (j = 0; (j < 32) && (j < cnt); j++)
             printf("%02x ", evtbuf[j]);
         printf("\n");
+
+	if (cnt > 32) {
+	  for (j = cnt-32; j < cnt; j++)
+            printf("%02x ", evtbuf[j]);
+	  printf("\n");
+	}
 
     }
     
