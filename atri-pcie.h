@@ -30,7 +30,7 @@
 #define PCI_USE_MSI               1
 
 // Timer duration for lost interrupt (ms)
-#define IRQ_TIMEOUT_MS            1000
+#define IRQ_TIMEOUT_MS            5000
 
 // Xilinx XAPP1052 firmware test; driver sets up
 // transfer itself using a test pattern

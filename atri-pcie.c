@@ -1,3 +1,4 @@
+
 /*
  * ATRI PCIe Linux Device Driver
  * based loosely on Xilinx XAPP1052 sample bus master driver
@@ -457,7 +458,7 @@ irq_handler_t xpcie_irq_handler(int irq, void *dev_id, struct pt_regs *regs) {
     if (!gDie)
         queue_work(dma_setup_wq, &dma_work);
     
-    PDEBUG("%s evt_queue: %d events\n", gDrvrName, evtq_entries(gEvtQ));
+    PDEBUG("%s evt_queue: %u events\n", gDrvrName, evtq_entries(gEvtQ));
     PDEBUG("%s Interrupt Handler End ..\n", gDrvrName);
 
     return (irq_handler_t) IRQ_HANDLED;
@@ -520,9 +521,9 @@ void dma_setup(struct work_struct *work) {
         xpcie_write_reg(REG_WDMATLPC, (tlp_cnt&0x7ff)+1);
     }
     else {
-        // FIX ME TEST
-        // Overloaded: clock cycles per simulated event
-        xpcie_write_reg(REG_RDMATLPP, 10000000);
+        // Overloaded: additional waiting time for transfer start: 
+        // nwords(16 downto 0) + ('0' & nwords(16 downto 0)) - REG_RDMATLPP
+        xpcie_write_reg(REG_RDMATLPP, 0);
     }    
     mmiowb();
 
@@ -632,7 +633,7 @@ void xpcie_write_reg(u32 dw_offset, u32 val) {
 }
 
 unsigned int xpcie_get_transfer_size(void) {
-    u32 tlp_size, tlp_cnt, tlp_extra;
+    u32 tlp_size, tlp_cnt, tlp_hw_cnt;
     u32 bytes;
     tlp_size = xpcie_read_reg(REG_WDMATLPS) & DMA_TLP_SIZE_MASK;
     tlp_cnt = xpcie_read_reg(REG_WDMATLPC) & DMA_TLP_CNT_MASK;
@@ -640,10 +641,10 @@ unsigned int xpcie_get_transfer_size(void) {
         bytes = (tlp_size*tlp_cnt*4);
     }
     else {
-        tlp_extra = xpcie_read_reg(REG_WDMATLPEX);
-        bytes = (tlp_size*(tlp_cnt-1) + tlp_extra)*4;
-        PDEBUG("%s transfer size %u B (size %u cnt %u extra %u)\n",
-               gDrvrName, bytes, tlp_size, tlp_cnt, tlp_extra);        
+        tlp_hw_cnt = xpcie_read_reg(REG_WDMATLPEX);
+        bytes = tlp_hw_cnt*2;
+        PDEBUG("%s transfer size %u B (%u halfwords)\n",
+               gDrvrName, bytes, tlp_hw_cnt);
     }
     return bytes;
 }
