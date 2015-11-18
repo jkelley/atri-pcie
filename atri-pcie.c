@@ -114,6 +114,9 @@ int xpcie_release(struct inode *inode, struct file *filp) {
     gReadAbort = 1;
     wake_up_interruptible(&gEvtQ->rd_waitq);    
 
+    // Stop the IRQ timeout timer
+    del_timer(&irq_timer);
+
     // Release the single-reader lock
     up(&gSemOpen);
     PDEBUG("%s: Release: device released\n",gDrvrName);    
